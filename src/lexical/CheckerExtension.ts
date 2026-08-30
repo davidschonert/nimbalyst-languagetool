@@ -15,15 +15,26 @@
 import { $getNodeByKey, $isTextNode, defineExtension, type LexicalEditor } from 'lexical';
 
 import { buildAnnotatedDocument, type AnnotatedDocument } from '../core/annotate';
-import { check, CheckError, type CheckErrorKind } from '../core/client';
-import { checkOptions, triggerMode } from '../core/config';
+import { check, CheckError, type Backend, type CheckErrorKind } from '../core/client';
+import { backend, checkOptions, triggerMode } from '../core/config';
 import { anchorMatches } from '../core/matches';
 import type { AnchoredMatch } from '../core/types';
 import { MatchPopover } from '../ui/MatchPopover';
 import { UnderlineLayer, type UnderlineHit } from '../ui/UnderlineLayer';
 
-/** Long enough that a pause in typing triggers a check, not a keystroke. */
-const CHECK_DEBOUNCE_MS = 1500;
+/**
+ * Long enough that a pause in typing triggers a check, not a keystroke.
+ *
+ * A local server is unmetered and answers a full document in roughly half a
+ * second, so it can afford to feel responsive. The cloud backend is rate
+ * limited per day, so it waits for a real pause rather than a gap between
+ * words. Superseded checks are aborted either way, so a short wait costs
+ * cancelled requests rather than duplicated work.
+ */
+const CHECK_DEBOUNCE_MS: Record<Backend, number> = {
+  local: 400,
+  cloud: 2500,
+};
 
 /** Grace period so moving from an underline onto the card does not close it. */
 const HOVER_CLOSE_MS = 140;
@@ -129,7 +140,7 @@ export const LanguageToolExtension = defineExtension({
       checkTimer = setTimeout(() => {
         hasChecked = true;
         void runCheck();
-      }, CHECK_DEBOUNCE_MS);
+      }, CHECK_DEBOUNCE_MS[backend()]);
     };
 
     const openFor = (hit: UnderlineHit): void => {
