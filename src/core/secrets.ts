@@ -18,7 +18,10 @@
  * renamed channel degrades to "the cloud backend is unavailable" rather than
  * throwing into the check path.
  *
- * Tracked upstream: nimbalyst/nimbalyst — expose storage on ExtensionServices.
+ * Tracked upstream: https://github.com/nimbalyst/nimbalyst/issues/1407
+ * If storage is added to ExtensionServices, replace the invoke calls below
+ * with `services.storage.getSecret('apiKey')`. The key scheme already matches,
+ * so no stored value needs migrating.
  */
 
 const EXTENSION_ID = 'io.github.davidschonert.languagetool';
