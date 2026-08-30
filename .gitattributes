@@ -1,0 +1,3 @@
+# Normalise line endings in the repository so a Windows checkout does not
+# produce CRLF churn in diffs for contributors on other platforms.
+* text=auto eol=lf
