@@ -18,6 +18,7 @@ import { buildAnnotatedDocument, type AnnotatedDocument } from '../core/annotate
 import { check, CheckError, type Backend, type CheckErrorKind } from '../core/client';
 import { backend, checkOptions, triggerMode } from '../core/config';
 import { anchorMatches } from '../core/matches';
+import { readApiKey } from '../core/secrets';
 import type { AnchoredMatch } from '../core/types';
 import { MatchPopover } from '../ui/MatchPopover';
 import { UnderlineLayer, type UnderlineHit } from '../ui/UnderlineLayer';
@@ -106,6 +107,12 @@ export const LanguageToolExtension = defineExtension({
       // server, so it never spends work finding them again.
       if (ignoredRules.size > 0) {
         options.disabledRules = [...(options.disabledRules ?? []), ...ignoredRules];
+      }
+      // Read only when the cloud backend is actually selected, so the token is
+      // never fetched for a workflow that does not use it.
+      if (options.backend === 'cloud') {
+        const apiKey = await readApiKey();
+        if (apiKey) options.apiKey = apiKey;
       }
 
       try {
