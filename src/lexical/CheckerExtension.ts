@@ -5,102 +5,28 @@
  * extension graph, so `register` receives the live `LexicalEditor`. That is the
  * only handle an extension gets on the built-in editor.
  *
- * Spike 1 (passed) established that `register` fires for the built-in markdown
- * editor, that the root element is not mounted at that point, and that
- * `dirtyLeaves` is 0 on the first update.
- *
- * Spike 2 (passed) established that an absolutely positioned overlay holds its
- * position through typing, scrolling and reflow, provided repositioning and
- * re-checking do not share a debounce.
- *
- * Matches are still generated locally. Nothing talks to LanguageTool yet, so
- * the card and the apply/ignore paths can be judged before the client exists.
+ * Spike 1 established that `register` fires for the built-in markdown editor,
+ * that the root element is not mounted at that point, and that `dirtyLeaves` is
+ * 0 on the first update. Spike 2 established that an absolutely positioned
+ * overlay holds its position through typing, scrolling and reflow, provided
+ * repositioning and re-checking do not share a debounce.
  */
 
-import {
-  $getNodeByKey,
-  $getRoot,
-  $isElementNode,
-  $isTextNode,
-  defineExtension,
-  type LexicalEditor,
-  type LexicalNode,
-  type TextNode,
-} from 'lexical';
+import { $getNodeByKey, $isTextNode, defineExtension, type LexicalEditor } from 'lexical';
 
-import { buildAnnotatedDocument } from '../core/annotate';
-import { triggerMode } from '../core/config';
-import type { AnchoredMatch, CheckMatch, MatchKind } from '../core/types';
+import { buildAnnotatedDocument, type AnnotatedDocument } from '../core/annotate';
+import { check, CheckError, type CheckErrorKind } from '../core/client';
+import { checkOptions, triggerMode } from '../core/config';
+import { anchorMatches } from '../core/matches';
+import type { AnchoredMatch } from '../core/types';
 import { MatchPopover } from '../ui/MatchPopover';
 import { UnderlineLayer, type UnderlineHit } from '../ui/UnderlineLayer';
 
-/** Real checking will idle for 1.5-2s. Shorter here to make the spike easier to poke at. */
-const DEBOUNCE_MS = 400;
-
-/** Keep the fake set small enough that the card stays judgeable. */
-const MAX_FAKE_MATCHES = 40;
+/** Long enough that a pause in typing triggers a check, not a keystroke. */
+const CHECK_DEBOUNCE_MS = 1500;
 
 /** Grace period so moving from an underline onto the card does not close it. */
 const HOVER_CLOSE_MS = 140;
-
-interface FakeRule {
-  id: string;
-  pattern: RegExp;
-  kind: MatchKind;
-  category: string;
-  title: string;
-  detail: string;
-  replacements: (found: RegExpExecArray) => string[];
-}
-
-/**
- * Stand-ins shaped like real LanguageTool matches. The first reproduces the
- * decapitalize case from the reference screenshot.
- */
-const FAKE_RULES: FakeRule[] = [
-  {
-    id: 'FAKE_UPPERCASE_SENTENCE_START',
-    pattern: /\b[a-z]+\s+([A-Z][a-z]{2,})\b/g,
-    kind: 'spelling',
-    category: 'Correct',
-    title: 'Spelling mistake',
-    detail: 'Decapitalize word',
-    replacements: (found) => [String(found[1]).toLowerCase()],
-  },
-  {
-    id: 'FAKE_WORD_REPEAT',
-    pattern: /\b(\w+)\s+\1\b/gi,
-    kind: 'grammar',
-    category: 'Grammar',
-    title: 'Word repetition',
-    detail: 'You repeated a word here.',
-    replacements: (found) => [String(found[1])],
-  },
-  {
-    id: 'FAKE_INTENSIFIER',
-    pattern: /\b(?:very|really|quite)\s+([a-z]{3,})\b/gi,
-    kind: 'style',
-    category: 'Clarity',
-    title: 'Wordiness',
-    detail: 'Consider a stronger word instead of an intensifier.',
-    replacements: (found) => [String(found[1])],
-  },
-];
-
-function collectTextNodes(): TextNode[] {
-  const found: TextNode[] = [];
-  const visit = (node: LexicalNode): void => {
-    if ($isTextNode(node)) {
-      found.push(node);
-      return;
-    }
-    if ($isElementNode(node)) {
-      for (const child of node.getChildren()) visit(child);
-    }
-  };
-  for (const child of $getRoot().getChildren()) visit(child);
-  return found;
-}
 
 /** Stable enough to dismiss one occurrence without dismissing its neighbours. */
 function anchorId(anchor: AnchoredMatch): string {
@@ -119,6 +45,13 @@ export const LanguageToolExtension = defineExtension({
 
     let checkTimer: ReturnType<typeof setTimeout> | undefined;
     let closeTimer: ReturnType<typeof setTimeout> | undefined;
+
+    // Supersede rather than queue: only the newest check matters.
+    let checkToken = 0;
+    let inFlight: AbortController | undefined;
+    /** Only report a distinct failure once, so a stopped server does not spam. */
+    let reportedFailure: CheckErrorKind | undefined;
+    let hasChecked = false;
 
     const popover = new MatchPopover({
       onApply: (anchor, replacement) => {
@@ -140,62 +73,69 @@ export const LanguageToolExtension = defineExtension({
       },
     });
 
-    const recompute = (): void => {
-      editor.getEditorState().read(() => {
-        const next: AnchoredMatch[] = [];
-
-        scan: for (const node of collectTextNodes()) {
-          const nodeKey = node.getKey();
-          const text = node.getTextContent();
-
-          for (const rule of FAKE_RULES) {
-            if (ignoredRules.has(rule.id)) continue;
-
-            rule.pattern.lastIndex = 0;
-            let found: RegExpExecArray | null;
-            while ((found = rule.pattern.exec(text)) !== null) {
-              // Anchor to the captured group, not the whole match, so the
-              // underline sits under the offending word, not its lead-in.
-              const captured = String(found[1] ?? found[0]);
-              const offset = found.index + found[0].indexOf(captured);
-
-              const match: CheckMatch = {
-                title: rule.title,
-                detail: rule.detail,
-                replacements: rule.replacements(found),
-                ruleId: rule.id,
-                category: rule.category,
-                kind: rule.kind,
-              };
-              const anchor: AnchoredMatch = { nodeKey, offset, length: captured.length, match };
-
-              if (!ignoredAnchors.has(anchorId(anchor))) next.push(anchor);
-              if (next.length >= MAX_FAKE_MATCHES) break scan;
-            }
-          }
-        }
-
-        matches = next;
-        layer.setMatches(matches);
-
-        // TEMPORARY. The annotation cannot be judged without a server to send
-        // it to, so it is published for inspection until the client lands.
-        // In DevTools: copy(__ltAnnotation)
-        const doc = buildAnnotatedDocument();
-        const suppressed = doc.annotation.filter((item) => 'markup' in item);
-        (window as Window & { __ltAnnotation?: unknown }).__ltAnnotation = doc.annotation;
-        console.info('[languagetool] annotation', {
-          items: doc.annotation.length,
-          proseRuns: doc.segments.length,
-          suppressed: suppressed.length,
-          sample: suppressed.slice(0, 8),
-        });
-      });
-    };
-
     const closeCard = (): void => {
       popover.hide();
       layer.setActive(null);
+    };
+
+    const runCheck = async (): Promise<void> => {
+      const token = ++checkToken;
+      inFlight?.abort();
+      const controller = new AbortController();
+      inFlight = controller;
+
+      let doc: AnnotatedDocument | undefined;
+      editor.getEditorState().read(() => {
+        doc = buildAnnotatedDocument();
+      });
+      if (!doc) return;
+
+      const options = checkOptions();
+      // Rules dismissed with the card's disable control are declined at the
+      // server, so it never spends work finding them again.
+      if (ignoredRules.size > 0) {
+        options.disabledRules = [...(options.disabledRules ?? []), ...ignoredRules];
+      }
+
+      try {
+        const raw = await check(doc, options, controller.signal);
+        if (token !== checkToken) return;
+
+        reportedFailure = undefined;
+        matches = anchorMatches(doc, raw).filter(
+          (anchor) => !ignoredAnchors.has(anchorId(anchor)),
+        );
+        layer.setMatches(matches);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        if (token !== checkToken) return;
+
+        // A local server that is not running is an expected state, not an
+        // error to shout about. Go quiet and try again on the next pause.
+        matches = [];
+        layer.setMatches(matches);
+        closeCard();
+
+        const kind = error instanceof CheckError ? error.kind : 'http';
+        if (kind !== reportedFailure) {
+          reportedFailure = kind;
+          console.warn('[languagetool] check failed:', (error as Error).message);
+        }
+      }
+    };
+
+    const scheduleCheck = (): void => {
+      clearTimeout(checkTimer);
+      checkTimer = setTimeout(() => {
+        hasChecked = true;
+        void runCheck();
+      }, CHECK_DEBOUNCE_MS);
+    };
+
+    const openFor = (hit: UnderlineHit): void => {
+      if (popover.current === hit.anchor) return;
+      popover.show(hit.anchor, hit.rect);
+      layer.setActive(hit.anchor);
     };
 
     const scheduleClose = (): void => {
@@ -210,12 +150,6 @@ export const LanguageToolExtension = defineExtension({
       if (!closeTimer) return;
       clearTimeout(closeTimer);
       closeTimer = undefined;
-    };
-
-    const openFor = (hit: UnderlineHit): void => {
-      if (popover.current === hit.anchor) return;
-      popover.show(hit.anchor, hit.rect);
-      layer.setActive(hit.anchor);
     };
 
     // The overlay stays pointer-events:none so it never interferes with text
@@ -271,10 +205,7 @@ export const LanguageToolExtension = defineExtension({
 
     const unregisterRoot = editor.registerRootListener((root, prevRoot) => {
       if (prevRoot) layer.detach();
-      if (root) {
-        layer.attach(root);
-        recompute();
-      }
+      if (root) layer.attach(root);
     });
 
     const unregisterUpdate = editor.registerUpdateListener(({ dirtyLeaves }) => {
@@ -286,13 +217,16 @@ export const LanguageToolExtension = defineExtension({
       }
       layer.setMatches(matches);
 
-      clearTimeout(checkTimer);
-      checkTimer = setTimeout(recompute, DEBOUNCE_MS);
+      // Moving the caret changes no text, so it is not worth a request. The
+      // first update is the initial load, which reports no dirty leaves.
+      if (dirtyLeaves.size === 0 && hasChecked) return;
+      scheduleCheck();
     });
 
     return () => {
       clearTimeout(checkTimer);
       cancelClose();
+      inFlight?.abort();
       document.removeEventListener('click', onClick);
       document.removeEventListener('mousemove', onPointerMove);
       document.removeEventListener('keydown', onKeyDown);
