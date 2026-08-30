@@ -13,30 +13,25 @@
 
 import type { LexicalEditor } from 'lexical';
 
-export type MatchKind = 'spelling' | 'grammar' | 'style';
+import type { AnchoredMatch, MatchKind } from '../core/types';
 
-/**
- * A flagged range, anchored the way Lexical addresses text: a node key plus an
- * offset inside that node. There is no whole-document offset space to use.
- */
-export interface AnchoredRange {
-  nodeKey: string;
-  offset: number;
-  length: number;
-  kind: MatchKind;
+/** A painted rect kept so the pointer can be tested against it. */
+export interface UnderlineHit {
+  anchor: AnchoredMatch;
+  /** Viewport coordinates, valid until the next repaint. */
+  rect: { left: number; top: number; right: number; bottom: number };
 }
 
-const SQUIGGLE: Record<MatchKind, string> = {
+const STROKE: Record<MatchKind, string> = {
   spelling: '%23d6453d',
   grammar: '%23d19a2c',
   style: '%233d7bd6',
 };
 
 function squiggleFor(kind: MatchKind): string {
-  const stroke = SQUIGGLE[kind];
   return (
     `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' ` +
-    `width='6' height='3'><path d='M0 2 Q1.5 0 3 2 T6 2' stroke='${stroke}' ` +
+    `width='6' height='3'><path d='M0 2 Q1.5 0 3 2 T6 2' stroke='${STROKE[kind]}' ` +
     `fill='none' stroke-width='1'/></svg>")`
   );
 }
@@ -104,8 +99,9 @@ export class UnderlineLayer {
   private readonly editor: LexicalEditor;
   private readonly wrapper: HTMLDivElement;
 
-  private ranges: readonly AnchoredRange[] = [];
-  private painted: HTMLElement[] = [];
+  private anchors: readonly AnchoredMatch[] = [];
+  private painted: Array<{ element: HTMLElement; hit: UnderlineHit }> = [];
+  private active: AnchoredMatch | null = null;
   private parent: HTMLElement | null = null;
   private scroller: HTMLElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
@@ -117,8 +113,6 @@ export class UnderlineLayer {
     this.editor = editor;
     this.wrapper = document.createElement('div');
     this.wrapper.className = 'lt-underline-layer';
-    this.wrapper.style.position = 'relative';
-    this.wrapper.style.pointerEvents = 'none';
   }
 
   attach(root: HTMLElement): void {
@@ -155,9 +149,29 @@ export class UnderlineLayer {
     this.parent = null;
   }
 
-  setRanges(ranges: readonly AnchoredRange[]): void {
-    this.ranges = ranges;
+  setMatches(anchors: readonly AnchoredMatch[]): void {
+    this.anchors = anchors;
     this.schedule();
+  }
+
+  /** Tint the match whose card is open, as LanguageTool does. */
+  setActive(anchor: AnchoredMatch | null): void {
+    if (this.active === anchor) return;
+    this.active = anchor;
+    for (const { element, hit } of this.painted) {
+      element.dataset['active'] = String(hit.anchor === anchor);
+    }
+  }
+
+  /** The match under the pointer, in viewport coordinates. */
+  hitTest(clientX: number, clientY: number): UnderlineHit | null {
+    for (const { hit } of this.painted) {
+      const { left, top, right, bottom } = hit.rect;
+      if (clientX >= left && clientX <= right && clientY >= top && clientY <= bottom) {
+        return hit;
+      }
+    }
+    return null;
   }
 
   /** Coalesce bursts of scroll and update events into one paint per frame. */
@@ -170,7 +184,7 @@ export class UnderlineLayer {
   }
 
   private clear(): void {
-    for (const el of this.painted) el.remove();
+    for (const { element } of this.painted) element.remove();
     this.painted = [];
   }
 
@@ -179,12 +193,12 @@ export class UnderlineLayer {
     if (!parent) return;
 
     this.clear();
-    if (this.ranges.length === 0) return;
+    if (this.anchors.length === 0) return;
 
     const { left: parentLeft, top: parentTop } = parent.getBoundingClientRect();
 
     this.editor.getEditorState().read(() => {
-      for (const anchor of this.ranges) {
+      for (const anchor of this.anchors) {
         const element = this.editor.getElementByKey(anchor.nodeKey);
         if (!element) continue;
 
@@ -195,17 +209,28 @@ export class UnderlineLayer {
         // segment on each line rather than one box spanning both.
         for (const rect of Array.from(range.getClientRects())) {
           const mark = document.createElement('div');
-          mark.style.position = 'absolute';
+          mark.className = 'lt-underline';
+          mark.dataset['kind'] = anchor.match.kind;
+          mark.dataset['active'] = String(anchor === this.active);
           mark.style.left = `${rect.left - parentLeft}px`;
           mark.style.top = `${rect.top - parentTop}px`;
           mark.style.width = `${rect.width}px`;
           mark.style.height = `${rect.height}px`;
-          mark.style.pointerEvents = 'none';
-          mark.style.backgroundImage = squiggleFor(anchor.kind);
-          mark.style.backgroundRepeat = 'repeat-x';
-          mark.style.backgroundPosition = 'left bottom';
+          mark.style.backgroundImage = squiggleFor(anchor.match.kind);
+
           this.wrapper.appendChild(mark);
-          this.painted.push(mark);
+          this.painted.push({
+            element: mark,
+            hit: {
+              anchor,
+              rect: {
+                left: rect.left,
+                top: rect.top,
+                right: rect.right,
+                bottom: rect.bottom,
+              },
+            },
+          });
         }
       }
     });

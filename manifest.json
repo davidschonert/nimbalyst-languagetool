@@ -5,6 +5,7 @@
   "description": "Grammar, style, and spell checking in the markdown editor, powered by LanguageTool.",
   "author": "David Schonert",
   "main": "dist/index.js",
+  "styles": "dist/index.css",
   "apiVersion": "1.0.0",
   "permissions": {
     "filesystem": false,
@@ -12,6 +13,23 @@
     "network": true
   },
   "contributions": {
-    "lexicalExtensions": ["LanguageToolExtension"]
+    "lexicalExtensions": [
+      "LanguageToolExtension"
+    ],
+    "configuration": {
+      "title": "LanguageTool",
+      "properties": {
+        "languagetool.triggerMode": {
+          "type": "string",
+          "enum": [
+            "click",
+            "hover"
+          ],
+          "default": "click",
+          "description": "How the correction card opens: click the underlined text, or hover over it. Takes effect the next time the extension loads.",
+          "order": 10
+        }
+      }
+    }
   }
 }
