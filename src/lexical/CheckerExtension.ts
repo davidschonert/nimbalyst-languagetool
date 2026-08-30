@@ -28,6 +28,7 @@ import {
   type TextNode,
 } from 'lexical';
 
+import { buildAnnotatedDocument } from '../core/annotate';
 import { triggerMode } from '../core/config';
 import type { AnchoredMatch, CheckMatch, MatchKind } from '../core/types';
 import { MatchPopover } from '../ui/MatchPopover';
@@ -176,6 +177,19 @@ export const LanguageToolExtension = defineExtension({
 
         matches = next;
         layer.setMatches(matches);
+
+        // TEMPORARY. The annotation cannot be judged without a server to send
+        // it to, so it is published for inspection until the client lands.
+        // In DevTools: copy(__ltAnnotation)
+        const doc = buildAnnotatedDocument();
+        const suppressed = doc.annotation.filter((item) => 'markup' in item);
+        (window as Window & { __ltAnnotation?: unknown }).__ltAnnotation = doc.annotation;
+        console.info('[languagetool] annotation', {
+          items: doc.annotation.length,
+          proseRuns: doc.segments.length,
+          suppressed: suppressed.length,
+          sample: suppressed.slice(0, 8),
+        });
       });
     };
 
