@@ -3,6 +3,10 @@
 Standing context and rules for Claude Code working in this repository. Read this file first, then
 the module the task points to. Keep it in sync with `README.md`.
 
+`ROADMAP.md` holds everything known to be missing, and is the only place unimplemented work is
+recorded. Add to it rather than leaving an intention in a commit message or a pull request, since
+two requirements from the original brief were lost that way before it existed.
+
 ## What this project is
 
 A Nimbalyst extension that puts LanguageTool grammar, style and spell checking inside the built-in

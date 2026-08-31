@@ -26,15 +26,9 @@ Document text is sent to the cloud backend only when you choose it. The access t
 - [x] Markdown-aware checking, built from the Lexical node tree so syntax is not flagged
 - [x] Both backends, with local as the default
 - [x] Settings panel: backend, credentials, language, rule and category disabling, `picky`
-- [ ] Personal dictionary. Product names are currently reported as misspellings, so this
-      is the next thing worth doing
-- [ ] Chunking, so a long document is checked in blocks. The service rejects a single request
-      over 20,000 characters on the free tier and 60,000 on Premium, and chunking would also
-      return results for the top of a document sooner and let an edit re-check only its own block
-- [ ] Rate limiting. The cloud debounce is one fixed value, which is too slow for Premium and
-      too fast for the free tier
-- [ ] A visible indicator of the active backend in the editor
-- [ ] Inline suppression comments
+
+Everything still missing is in [ROADMAP.md](ROADMAP.md), with the constraint behind each item.
+The next one is a personal dictionary, since product names are currently reported as misspellings.
 
 ## Development
 
