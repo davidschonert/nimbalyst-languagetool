@@ -30,7 +30,7 @@ import { UnderlineLayer, type UnderlineHit } from '../ui/UnderlineLayer';
  * second, so it can afford to feel responsive. The cloud backend is rate
  * limited per day, so it waits for a real pause rather than a gap between
  * words. Superseded checks are aborted either way, so a short wait costs
- * cancelled requests rather than duplicated work.
+ * canceled requests rather than duplicated work.
  */
 const CHECK_DEBOUNCE_MS: Record<Backend, number> = {
   local: 400,
@@ -40,7 +40,7 @@ const CHECK_DEBOUNCE_MS: Record<Backend, number> = {
 /** Grace period so moving from an underline onto the card does not close it. */
 const HOVER_CLOSE_MS = 140;
 
-/** Stable enough to dismiss one occurrence without dismissing its neighbours. */
+/** Stable enough to dismiss one occurrence without dismissing its neighbors. */
 function anchorId(anchor: AnchoredMatch): string {
   return anchor.nodeKey + ':' + anchor.offset + ':' + anchor.match.ruleId;
 }

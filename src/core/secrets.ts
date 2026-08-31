@@ -14,18 +14,18 @@
  *
  *   2. `ExtensionStorage` is unusable for secrets on Windows regardless.
  *      `createExtensionStorage` scopes every secret as
- *      `nimbalyst:${extensionId}:${key}`, the main process sanitises with
+ *      `nimbalyst:${extensionId}:${key}`, the main process sanitizes with
  *      `[^a-zA-Z0-9_:-]` which keeps colons, and the result becomes a
  *      filename. NTFS reads `name:stream` as an Alternate Data Stream, so the
  *      write fails with ENOENT and the read finds nothing. Verified: a colon
  *      key fails, the same key with underscores succeeds.
  *
- * The key below is therefore chosen to survive that sanitiser unchanged rather
+ * The key below is therefore chosen to survive that sanitizer unchanged rather
  * than to match the SDK's scheme, which cannot be produced on Windows anyway.
  * The store, the file location and the encryption are all still the host's.
  */
 
-/** Already sanitiser-safe: only letters, digits and underscores. */
+/** Already sanitizer-safe: only letters, digits and underscores. */
 const SECRET_KEY = 'nimbalyst_io_github_davidschonert_languagetool_apiKey';
 
 interface ElectronBridge {

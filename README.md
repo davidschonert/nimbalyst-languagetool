@@ -1,8 +1,8 @@
 # nimbalyst-languagetool
 
-LanguageTool grammar, style, and spell checking inside the [Nimbalyst](https://nimbalyst.com) markdown editor. Underlines on flagged text, an explanation on hover, and replacement suggestions you can click to apply.
+LanguageTool grammar, style, and spell checking inside the [Nimbalyst](https://nimbalyst.com) markdown editor. Underlines on flagged text, a correction card explaining each one, and replacement suggestions you can click to apply.
 
-This is early and it does not check anything yet. The code currently in `src/` only tries to prove that Nimbalyst hands an extension the live markdown editor, which is what everything else depends on.
+It works and I use it. The Status section below lists what is still missing.
 
 ## Requirements
 
@@ -12,7 +12,7 @@ This is early and it does not check anything yet. The code currently in `src/` o
 
 ## Backends
 
-Two backends, switchable from settings, with the active one shown in the editor.
+Two backends, switchable from the settings panel.
 
 **Local.** A self-hosted LanguageTool HTTP Server, by default at `http://localhost:8081`. This is the default, and it is the only backend that runs while you type. Nothing leaves the machine.
 
@@ -28,6 +28,12 @@ Document text is sent to the cloud backend only when you choose it. The access t
 - [x] Settings panel: backend, credentials, language, rule and category disabling, `picky`
 - [ ] Personal dictionary. Product names are currently reported as misspellings, so this
       is the next thing worth doing
+- [ ] Chunking, so a long document is checked in blocks. The service rejects a single request
+      over 20,000 characters on the free tier and 60,000 on Premium, and chunking would also
+      return results for the top of a document sooner and let an edit re-check only its own block
+- [ ] Rate limiting. The cloud debounce is one fixed value, which is too slow for Premium and
+      too fast for the free tier
+- [ ] A visible indicator of the active backend in the editor
 - [ ] Inline suppression comments
 
 ## Development

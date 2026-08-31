@@ -4,7 +4,7 @@
  * client later is a mapping step and not a refactor.
  */
 
-/** Drives underline colour and the card's accent. Derived from `rule.issueType`. */
+/** Drives underline color and the card's accent. Derived from `rule.issueType`. */
 export type MatchKind = 'spelling' | 'grammar' | 'style';
 
 export interface CheckMatch {

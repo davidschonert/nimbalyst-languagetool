@@ -2,7 +2,7 @@
  * Lexical tree to LanguageTool AnnotatedText.
  *
  * The document is a node tree, not a markdown string, so the annotation is
- * built directly from the tree. Nothing is serialised to markdown and re-parsed,
+ * built directly from the tree. Nothing is serialized to markdown and re-parsed,
  * which means match offsets never have to be reverse-mapped through a
  * round trip: every emitted run of prose records where it came from.
  *
