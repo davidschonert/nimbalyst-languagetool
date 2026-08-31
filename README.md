@@ -7,7 +7,7 @@ This is early and it does not check anything yet. The code currently in `src/` o
 ## Requirements
 
 - Nimbalyst 0.75.5 or later. The extension is built against extension SDK 0.5.0, and I have not tested it against any earlier version.
-- Node.js 18 or later, for building.
+- Node.js 20.19 or later, for building.
 - A LanguageTool backend, either a local server or a LanguageTool Premium account.
 
 ## Backends
@@ -22,22 +22,32 @@ Document text is sent to the cloud backend only when you choose it. The access t
 
 ## Status
 
-- [x] Project scaffold, building against the extension SDK
-- [x] Confirm the host calls `register(editor)` for the built-in markdown editor
-- [x] Draw an underline over a document range and keep it positioned through editing and scrolling
-- [ ] Build AnnotatedText from the Lexical node tree, so markdown syntax is not flagged
-- [ ] The `/v2/check` client, for both backends
-- [ ] Underlines, hover explanations, and click to apply
-- [ ] Settings, personal dictionary, rule and category disabling, and the `picky` level
+- [x] Underlines in the markdown editor, with a correction card and click to apply
+- [x] Markdown-aware checking, built from the Lexical node tree so syntax is not flagged
+- [x] Both backends, with local as the default
+- [x] Settings panel: backend, credentials, language, rule and category disabling, `picky`
+- [ ] Personal dictionary. Product names are currently reported as misspellings, so this
+      is the next thing worth doing
+- [ ] Inline suppression comments
 
 ## Development
 
 ```bash
 npm install
+npm test
 npm run build
 ```
 
-Then enable Extension Dev Tools in Settings > Advanced and install the built extension from this folder. `npm run dev` rebuilds on change.
+Then enable Extension Dev Tools in Settings > Advanced and install the built extension from this
+folder. `npm run dev` rebuilds on change.
+
+`npm run build` also validates the manifest against the rules Nimbalyst applies when it loads an
+extension. An invalid manifest makes the host skip the extension entirely, which looks like the
+extension being absent rather than broken, so it is worth failing the build instead.
+
+The tests cover the parts that can run without the editor: the tree walk, the offset mapping, the
+match anchoring, and the request the client builds. The overlay and the settings panel are verified
+by running the app.
 
 ## Credits
 
