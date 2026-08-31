@@ -61,12 +61,15 @@ export async function readApiKey(): Promise<string | undefined> {
   try {
     const value = await api.invoke('secrets:get', SECRET_KEY);
     cached = typeof value === 'string' && value.trim() ? value.trim() : undefined;
+    loaded = true;
   } catch {
     warnOnce('Could not read the stored access token, so the cloud backend is unavailable.');
     cached = undefined;
+    // Deliberately not `loaded`. A missing bridge never turns up later, so that
+    // path latches; a failed read is transient, and latching it would turn one
+    // bad IPC call into "no token" for the rest of the session.
   }
 
-  loaded = true;
   return cached;
 }
 

@@ -23,7 +23,7 @@ import type { SettingsPanelProps } from '@nimbalyst/extension-sdk';
 
 import type { Backend } from '../core/client';
 import { CheckError, testConnection } from '../core/client';
-import { baseUrlFor, DEFAULTS, KEYS, readBoolean, readString, writeSetting } from '../core/config';
+import { DEFAULTS, KEYS, readBoolean, readString, writeSetting } from '../core/config';
 import { clearApiKey, hasApiKey, readApiKey, writeApiKey } from '../core/secrets';
 
 type TestState =
@@ -111,8 +111,12 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
   }, []);
 
   const save = useCallback((key: string, value: unknown) => {
-    void writeSetting(key, value);
     setTest({ status: 'idle' });
+    // The host write crosses IPC and can reject. Discarding that silently makes
+    // a failed save look exactly like one that worked.
+    void writeSetting(key, value).catch(() => {
+      setTest({ status: 'failed', message: 'Could not save that setting.' });
+    });
   }, []);
 
   const saveToken = useCallback(async () => {
@@ -151,7 +155,12 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
       }
       await testConnection({
         backend,
-        baseUrl: baseUrlFor(backend),
+        // From local state, not the configuration service: save() does not await
+        // the host's IPC round-trip, so its cache still holds the previous URL
+        // when the blur that commits an edit is the same gesture as this click.
+        baseUrl:
+          (backend === 'cloud' ? cloudUrl : localUrl).trim() ||
+          (backend === 'cloud' ? DEFAULTS.cloudUrl : DEFAULTS.localUrl),
         language: language || DEFAULTS.language,
         ...(username.trim() ? { username: username.trim() } : {}),
         ...(apiKey ? { apiKey } : {}),
@@ -168,7 +177,7 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
           : String(error);
       setTest({ status: 'failed', message });
     }
-  }, [backend, language, username]);
+  }, [backend, language, username, localUrl, cloudUrl]);
 
   return (
     <div className="lt-settings">
