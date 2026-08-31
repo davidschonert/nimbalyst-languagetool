@@ -1,0 +1,30 @@
+{
+  "id": "io.github.davidschonert.languagetool",
+  "name": "LanguageTool",
+  "version": "0.0.1",
+  "description": "Grammar, style, and spell checking in the markdown editor, powered by LanguageTool.",
+  "author": "David Schonert",
+  "main": "dist/index.js",
+  "styles": "dist/index.css",
+  "apiVersion": "1.0.0",
+  "permissions": {
+    "filesystem": false,
+    "ai": false,
+    "network": true
+  },
+  "contributions": {
+    "lexicalExtensions": [
+      "LanguageToolExtension"
+    ],
+    "configuration": {
+      "title": "LanguageTool",
+      "properties": {}
+    },
+    "settingsPanel": {
+      "component": "LanguageToolSettings",
+      "title": "LanguageTool",
+      "icon": "spellcheck",
+      "order": 100
+    }
+  }
+}
