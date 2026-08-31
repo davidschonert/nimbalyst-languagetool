@@ -195,7 +195,10 @@ export class UnderlineLayer {
     this.clear();
     if (this.anchors.length === 0) return;
 
-    const { left: parentLeft, top: parentTop } = parent.getBoundingClientRect();
+    // The marks are absolutely positioned inside the wrapper, so the wrapper's
+    // own box is their origin. The parent's border box is not: it differs by the
+    // parent's padding, and it does not move when the parent is the scroller.
+    const { left: originLeft, top: originTop } = this.wrapper.getBoundingClientRect();
 
     this.editor.getEditorState().read(() => {
       for (const anchor of this.anchors) {
@@ -212,8 +215,8 @@ export class UnderlineLayer {
           mark.className = 'lt-underline';
           mark.dataset['kind'] = anchor.match.kind;
           mark.dataset['active'] = String(anchor === this.active);
-          mark.style.left = `${rect.left - parentLeft}px`;
-          mark.style.top = `${rect.top - parentTop}px`;
+          mark.style.left = `${rect.left - originLeft}px`;
+          mark.style.top = `${rect.top - originTop}px`;
           mark.style.width = `${rect.width}px`;
           mark.style.height = `${rect.height}px`;
           mark.style.backgroundImage = squiggleFor(anchor.match.kind);

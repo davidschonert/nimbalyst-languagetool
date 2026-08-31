@@ -20,6 +20,8 @@ export interface PopoverActions {
   onIgnore: (anchor: AnchoredMatch) => void;
   /** Stop reporting this rule entirely. */
   onIgnoreRule: (anchor: AnchoredMatch) => void;
+  /** The card closed, by whichever route. */
+  onClose: () => void;
 }
 
 /** Where the flagged text sits, in viewport coordinates. */
@@ -174,9 +176,16 @@ export class MatchPopover {
     this.position(rect);
   }
 
+  /**
+   * Every close route lands here — the close button, Escape, applying a
+   * replacement, the caller — so onClose is the single place the underline
+   * tint gets cleared.
+   */
   hide(): void {
+    const had = this.anchor;
     this.root.hidden = true;
     this.anchor = null;
+    if (had) this.actions.onClose();
   }
 
   /** Below the text by preference, flipped above when there is no room. */
@@ -188,6 +197,11 @@ export class MatchPopover {
       const above = rect.top - GAP - height;
       if (above >= VIEWPORT_MARGIN) top = above;
     }
+
+    // Neither side fits when the card is taller than the room above and below.
+    // Clamping keeps its buttons reachable instead of running off the edge.
+    const maxTop = window.innerHeight - height - VIEWPORT_MARGIN;
+    top = Math.max(VIEWPORT_MARGIN, Math.min(top, maxTop));
 
     const maxLeft = window.innerWidth - width - VIEWPORT_MARGIN;
     const left = Math.max(VIEWPORT_MARGIN, Math.min(rect.left, maxLeft));

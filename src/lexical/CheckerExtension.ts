@@ -61,11 +61,19 @@ export const LanguageToolExtension = defineExtension({
     // Supersede rather than queue: only the newest check matters.
     let checkToken = 0;
     let inFlight: AbortController | undefined;
+    /**
+     * Bumped by every update that changes text. The token alone does not catch
+     * an edit made while a check is in flight, because an edit does not start a
+     * new check until the debounce fires — so a response built from the older
+     * tree would be anchored to offsets that have already moved.
+     */
+    let docVersion = 0;
     /** Only report a distinct failure once, so a stopped server does not spam. */
     let reportedFailure: CheckErrorKind | undefined;
     let hasChecked = false;
 
     const popover = new MatchPopover({
+      onClose: () => layer.setActive(null),
       onApply: (anchor, replacement) => {
         editor.update(() => {
           const node = $getNodeByKey(anchor.nodeKey);
@@ -85,13 +93,12 @@ export const LanguageToolExtension = defineExtension({
       },
     });
 
-    const closeCard = (): void => {
-      popover.hide();
-      layer.setActive(null);
-    };
+    // hide() reports the close, which is what clears the underline tint.
+    const closeCard = (): void => popover.hide();
 
     const runCheck = async (): Promise<void> => {
       const token = ++checkToken;
+      const version = docVersion;
       inFlight?.abort();
       const controller = new AbortController();
       inFlight = controller;
@@ -117,7 +124,7 @@ export const LanguageToolExtension = defineExtension({
 
       try {
         const raw = await check(doc, options, controller.signal);
-        if (token !== checkToken) return;
+        if (token !== checkToken || version !== docVersion) return;
 
         reportedFailure = undefined;
         matches = anchorMatches(doc, raw).filter(
@@ -230,6 +237,7 @@ export const LanguageToolExtension = defineExtension({
       // Edited nodes invalidate their own anchors. Everything else only moved,
       // so it repaints immediately and the user never sees a stale underline.
       if (dirtyLeaves.size > 0) {
+        docVersion++;
         matches = matches.filter((anchor) => !dirtyLeaves.has(anchor.nodeKey));
         if (popover.current && dirtyLeaves.has(popover.current.nodeKey)) closeCard();
       }
