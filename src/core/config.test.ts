@@ -29,7 +29,7 @@ describe('defaults', () => {
     expect(checkOptions().baseUrl).toBe('http://localhost:8081');
   });
 
-  it('treats an unrecognised value as the default rather than passing it through', () => {
+  it('treats an unrecognized value as the default rather than passing it through', () => {
     bind({ [KEYS.backend]: 'nonsense', [KEYS.triggerMode]: 'nonsense' });
     expect(backend()).toBe('local');
     expect(triggerMode()).toBe('click');

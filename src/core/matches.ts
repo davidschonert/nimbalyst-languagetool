@@ -12,7 +12,7 @@ import type { AnchoredMatch, CheckMatch, MatchKind } from './types';
 
 /**
  * `rule.issueType` is a long open list. It collapses to three underline
- * colours: red for things that are wrong, amber for grammar, blue for taste.
+ * colors: red for things that are wrong, amber for grammar, blue for taste.
  */
 const STYLE_ISSUE_TYPES = new Set([
   'style',
