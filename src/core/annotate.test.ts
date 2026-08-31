@@ -1,12 +1,55 @@
 import { createHeadlessEditor } from '@lexical/headless';
-import { $createParagraphNode, $createTextNode, $getRoot } from 'lexical';
+import { $createParagraphNode, $createTextNode, $getRoot, ElementNode } from 'lexical';
 import { describe, expect, it } from 'vitest';
 
 import { buildAnnotatedDocument, resolveRange, type AnnotatedDocument } from './annotate';
 
+/**
+ * Stand-ins for the containers the real editor supplies. Nimbalyst's ListNode
+ * and LinkNode are not installed here, and what the tree walk keys off is
+ * isInline(), not the concrete type — so a pair that differ only in that
+ * answer is exactly the fixture the walk needs.
+ */
+class BlockContainer extends ElementNode {
+  static getType(): string {
+    return 'test-block';
+  }
+  static clone(node: BlockContainer): BlockContainer {
+    return new BlockContainer(node.__key);
+  }
+  createDOM(): HTMLElement {
+    return document.createElement('div');
+  }
+  updateDOM(): boolean {
+    return false;
+  }
+  isInline(): boolean {
+    return false;
+  }
+}
+
+class InlineContainer extends ElementNode {
+  static getType(): string {
+    return 'test-inline';
+  }
+  static clone(node: InlineContainer): InlineContainer {
+    return new InlineContainer(node.__key);
+  }
+  createDOM(): HTMLElement {
+    return document.createElement('span');
+  }
+  updateDOM(): boolean {
+    return false;
+  }
+  isInline(): boolean {
+    return true;
+  }
+}
+
 /** Build a document from a Lexical tree, the way the extension does at runtime. */
 function annotate(build: () => void): AnnotatedDocument {
   const editor = createHeadlessEditor({
+    nodes: [BlockContainer, InlineContainer],
     onError: (error) => {
       throw error;
     },
@@ -161,5 +204,74 @@ describe('resolveRange', () => {
   it('returns null for an empty range', () => {
     const doc = annotate(() => paragraph('Anything.'));
     expect(resolveRange(doc, 0, 0)).toBeNull();
+  });
+});
+
+describe('nested blocks', () => {
+  it('separates the items of a list, which are blocks in their own right', () => {
+    // Without the separator these join into "Buy milkTeh bread", LanguageTool
+    // reports a spelling match across the seam, and resolveRange clips it onto
+    // the tail of item one — an underline whose replacement rewrites the
+    // wrong word, on a typo that is really in item two.
+    const doc = annotate(() => {
+      const list = new BlockContainer();
+      for (const line of ['Buy milk', 'Teh bread']) {
+        const item = new BlockContainer();
+        item.append($createTextNode(line));
+        list.append(item);
+      }
+      $getRoot().append(list);
+    });
+
+    expect(flatten(doc)).toBe('Buy milk\n\nTeh bread');
+    expect(doc.segments).toHaveLength(2);
+  });
+
+  it('separates a nested list from the text of the item holding it', () => {
+    const doc = annotate(() => {
+      const list = new BlockContainer();
+      const item = new BlockContainer();
+      item.append($createTextNode('Top level'));
+
+      const nested = new BlockContainer();
+      const nestedItem = new BlockContainer();
+      nestedItem.append($createTextNode('Nested'));
+      nested.append(nestedItem);
+      item.append(nested);
+
+      list.append(item);
+      $getRoot().append(list);
+    });
+
+    expect(flatten(doc)).toBe('Top level\n\nNested');
+  });
+
+  it('does NOT break a sentence at an inline container', () => {
+    // The other half of the same decision: a link is an ElementNode too, so a
+    // walk that separated every element child would put a paragraph break
+    // inside this sentence and shift every offset after it.
+    const doc = annotate(() => {
+      const paragraph = $createParagraphNode();
+      const link = new InlineContainer();
+      link.append($createTextNode('the docs'));
+      paragraph.append($createTextNode('Visit '), link, $createTextNode(' for more.'));
+      $getRoot().append(paragraph);
+    });
+
+    expect(flatten(doc)).toBe('Visit the docs for more.');
+    expect(doc.annotation.every((item) => 'text' in item)).toBe(true);
+  });
+
+  it('leaves no separator before the first item that carries prose', () => {
+    const doc = annotate(() => {
+      const list = new BlockContainer();
+      list.append(new BlockContainer()); // empty item
+      const second = new BlockContainer();
+      second.append($createTextNode('Only line.'));
+      list.append(second);
+      $getRoot().append(list);
+    });
+
+    expect(flatten(doc)).toBe('Only line.');
   });
 });

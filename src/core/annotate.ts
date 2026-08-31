@@ -89,6 +89,11 @@ class AnnotationBuilder {
     return this.items.length === 0;
   }
 
+  /** How far the offset space has advanced, for deciding on a separator. */
+  get length(): number {
+    return this.cursor;
+  }
+
   build(): AnnotatedDocument {
     return { annotation: this.items, segments: this.segments };
   }
@@ -173,11 +178,21 @@ export function buildAnnotatedDocument(): AnnotatedDocument {
 }
 
 function emitBlock(builder: AnnotationBuilder, block: ElementNode): void {
+  const start = builder.length;
+
   for (const child of block.getChildren()) {
-    // Nested structure: list items, blockquotes, nested lists. Inline
-    // containers such as links land here too; both recursions converge on
-    // emitInline for the text nodes, so the result is the same either way.
-    if ($isElementNode(child)) {
+    // A nested block — a list item, a blockquote's paragraph, a nested list —
+    // is its own sentence context, exactly like a top-level block, so it gets
+    // the same paragraph break. Without one, "Buy milk" and "Teh bread" join
+    // into "Buy milkTeh bread" and every match across the seam is wrong.
+    //
+    // isInline() is what separates those from an inline container such as a
+    // link, which is NOT a sentence boundary: breaking there would split a
+    // sentence and shift every offset after it.
+    if ($isElementNode(child) && !child.isInline()) {
+      // Only once something precedes it, so a leading empty item adds nothing.
+      if (builder.length > start) builder.markup('\n\n', '\n\n');
+
       if (OPAQUE_BLOCK_TYPES.has(child.getType())) {
         builder.markup(child.getTextContent());
         continue;
