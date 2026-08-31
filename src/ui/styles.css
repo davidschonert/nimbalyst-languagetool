@@ -168,3 +168,123 @@
   font-size: 0.8125rem;
   font-style: italic;
 }
+
+/* ---------- settings panel ---------- */
+
+.lt-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  font-size: 0.875rem;
+  color: var(--nim-text, #1a1a1a);
+}
+
+.lt-section { display: flex; flex-direction: column; gap: 0.75rem; }
+
+.lt-section__title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.lt-section__note {
+  margin: -0.25rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--nim-text-muted, #6b7280);
+  max-width: 46ch;
+}
+
+.lt-field { display: flex; flex-direction: column; gap: 0.25rem; }
+
+.lt-field__label { font-weight: 500; font-size: 0.8125rem; }
+
+.lt-field__hint {
+  font-size: 0.75rem;
+  color: var(--nim-text-muted, #6b7280);
+  max-width: 46ch;
+}
+
+.lt-field__input {
+  font: inherit;
+  font-size: 0.8125rem;
+  padding: 0.375rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--nim-border, #e2e4e9);
+  background: var(--nim-bg-secondary, #fff);
+  color: var(--nim-text, #1a1a1a);
+  min-width: 0;
+  width: 100%;
+  max-width: 26rem;
+}
+.lt-field__input:focus-visible {
+  outline: 2px solid var(--nim-primary, #3d7bd6);
+  outline-offset: 1px;
+}
+
+/* ---------- segmented control ---------- */
+
+.lt-segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--nim-bg-tertiary, #f1f2f4);
+  width: max-content;
+}
+
+.lt-segmented__option {
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 0.3125rem 0.75rem;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--nim-text-muted, #6b7280);
+  cursor: pointer;
+}
+.lt-segmented__option[data-selected='true'] {
+  background: var(--nim-bg-secondary, #fff);
+  color: var(--nim-text, #1a1a1a);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 10%);
+}
+.lt-segmented__option:focus-visible {
+  outline: 2px solid var(--nim-primary, #3d7bd6);
+  outline-offset: 1px;
+}
+
+/* ---------- token row, buttons, test ---------- */
+
+.lt-token { display: flex; gap: 0.375rem; align-items: center; max-width: 26rem; }
+
+.lt-button {
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 0.375rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--nim-border, #e2e4e9);
+  background: transparent;
+  color: var(--nim-text, #1a1a1a);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.lt-button:hover:not(:disabled) { background: var(--nim-bg-tertiary, #f1f2f4); }
+.lt-button:disabled { opacity: 0.5; cursor: default; }
+.lt-button:focus-visible {
+  outline: 2px solid var(--nim-primary, #3d7bd6);
+  outline-offset: 1px;
+}
+
+.lt-test { display: flex; gap: 0.625rem; align-items: center; flex-wrap: wrap; }
+.lt-test__ok { font-size: 0.8125rem; color: #2e7d5b; }
+.lt-test__failed { font-size: 0.8125rem; color: var(--nim-error, #c0392b); }
+
+.lt-toggle {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  cursor: pointer;
+}
+.lt-toggle input { margin-top: 0.2rem; accent-color: var(--nim-primary, #3d7bd6); }
+.lt-toggle > span { display: flex; flex-direction: column; gap: 0.125rem; }

@@ -102,6 +102,19 @@ function buildBody(doc: AnnotatedDocument, options: CheckOptions): URLSearchPara
   return body;
 }
 
+/**
+ * Send one short sentence to confirm the backend answers and, for cloud, that
+ * the credentials are accepted. Throws the same CheckError as a real check, so
+ * the caller can tell "not running" from "bad token".
+ */
+export async function testConnection(options: CheckOptions): Promise<void> {
+  const probe: AnnotatedDocument = {
+    annotation: [{ text: 'This is a test.' }],
+    segments: [{ start: 0, length: 15, nodeKey: 'probe', nodeOffset: 0 }],
+  };
+  await check(probe, options);
+}
+
 export async function check(
   doc: AnnotatedDocument,
   options: CheckOptions,

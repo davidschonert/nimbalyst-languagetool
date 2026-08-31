@@ -18,76 +18,13 @@
     ],
     "configuration": {
       "title": "LanguageTool",
-      "properties": {
-        "languagetool.backend": {
-          "type": "string",
-          "enum": [
-            "local",
-            "cloud"
-          ],
-          "default": "local",
-          "description": "Which server to check against. Local keeps document text on this machine and is the default. Cloud sends document text to LanguageTool and needs a Premium username and access token.",
-          "order": 10
-        },
-        "languagetool.localUrl": {
-          "type": "string",
-          "default": "http://localhost:8081",
-          "description": "Base URL of your self-hosted LanguageTool HTTP server.",
-          "order": 20
-        },
-        "languagetool.cloudUrl": {
-          "type": "string",
-          "default": "https://api.languagetoolplus.com",
-          "description": "Base URL of the LanguageTool cloud service.",
-          "order": 30
-        },
-        "languagetool.username": {
-          "type": "string",
-          "default": "",
-          "description": "Cloud only. The email address on your LanguageTool account. The access token is stored separately and is not kept here.",
-          "order": 40
-        },
-        "languagetool.language": {
-          "type": "string",
-          "default": "en-US",
-          "description": "Language code such as en-US or en-GB, or auto to detect per document.",
-          "order": 50
-        },
-        "languagetool.motherTongue": {
-          "type": "string",
-          "default": "",
-          "description": "Your first language, such as de-DE. Enables false-friend checks. Leave empty to disable.",
-          "order": 60
-        },
-        "languagetool.picky": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable additional rules that are useful for formal writing.",
-          "order": 70
-        },
-        "languagetool.disabledRules": {
-          "type": "string",
-          "default": "",
-          "description": "Comma-separated rule IDs to never report, such as DASH_RULE.",
-          "order": 80
-        },
-        "languagetool.disabledCategories": {
-          "type": "string",
-          "default": "",
-          "description": "Comma-separated category IDs to never report, such as PUNCTUATION.",
-          "order": 90
-        },
-        "languagetool.triggerMode": {
-          "type": "string",
-          "enum": [
-            "click",
-            "hover"
-          ],
-          "default": "click",
-          "description": "How the correction card opens: click the underlined text, or hover over it. Takes effect the next time the extension loads.",
-          "order": 100
-        }
-      }
+      "properties": {}
+    },
+    "settingsPanel": {
+      "component": "LanguageToolSettings",
+      "title": "LanguageTool",
+      "icon": "spellcheck",
+      "order": 100
     }
   }
 }

@@ -3,31 +3,30 @@
  *
  * Nimbalyst keeps extension secrets in `extension-secrets/<key>.enc` under the
  * app's user data, encrypted with Electron `safeStorage` (DPAPI on Windows).
- * The SDK wraps that as `ExtensionStorage.getSecret`, but only hands the
- * storage object to custom editors, panels and settings panels. A contributed
- * Lexical extension receives `ExtensionServices`, which carries no storage at
- * all, so there is no supported way to reach the store from here.
+ * This module reaches that store over the same IPC channels the SDK's
+ * `ExtensionStorage` uses internally.
  *
- * This calls the same IPC channel `ExtensionStorage` calls internally. The
- * store, the file and the encryption are identical; what is given up is API
- * stability, not secrecy. The key below mirrors the SDK's own scoping scheme
- * exactly, so if `ExtensionServices` ever gains storage, `getSecret('apiKey')`
- * reads this same value and nothing needs migrating.
+ * Two separate reasons it does not use `ExtensionStorage` itself:
  *
- * Everything is funnelled through one module with a null fallback, so a
- * renamed channel degrades to "the cloud backend is unavailable" rather than
- * throwing into the check path.
+ *   1. A contributed Lexical extension receives `ExtensionServices`, which
+ *      carries no storage, so the runtime could never read the token at load.
+ *      Tracked at https://github.com/nimbalyst/nimbalyst/issues/1407
  *
- * Tracked upstream: https://github.com/nimbalyst/nimbalyst/issues/1407
- * If storage is added to ExtensionServices, replace the invoke calls below
- * with `services.storage.getSecret('apiKey')`. The key scheme already matches,
- * so no stored value needs migrating.
+ *   2. `ExtensionStorage` is unusable for secrets on Windows regardless.
+ *      `createExtensionStorage` scopes every secret as
+ *      `nimbalyst:${extensionId}:${key}`, the main process sanitises with
+ *      `[^a-zA-Z0-9_:-]` which keeps colons, and the result becomes a
+ *      filename. NTFS reads `name:stream` as an Alternate Data Stream, so the
+ *      write fails with ENOENT and the read finds nothing. Verified: a colon
+ *      key fails, the same key with underscores succeeds.
+ *
+ * The key below is therefore chosen to survive that sanitiser unchanged rather
+ * than to match the SDK's scheme, which cannot be produced on Windows anyway.
+ * The store, the file location and the encryption are all still the host's.
  */
 
-const EXTENSION_ID = 'io.github.davidschonert.languagetool';
-
-/** Mirrors the SDK: `nimbalyst:${extensionId}:${key}`. Do not change casually. */
-const SECRET_KEY = `nimbalyst:${EXTENSION_ID}:apiKey`;
+/** Already sanitiser-safe: only letters, digits and underscores. */
+const SECRET_KEY = 'nimbalyst_io_github_davidschonert_languagetool_apiKey';
 
 interface ElectronBridge {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>;
@@ -71,26 +70,40 @@ export async function readApiKey(): Promise<string | undefined> {
   return cached;
 }
 
+/** Whether a token is stored, without handing the value to the caller. */
+export async function hasApiKey(): Promise<boolean> {
+  return Boolean(await readApiKey());
+}
+
 export async function writeApiKey(value: string): Promise<boolean> {
   const api = bridge();
   if (!api) return false;
 
   const trimmed = value.trim();
+  if (!trimmed) return clearApiKey();
+
   try {
-    if (trimmed) {
-      await api.invoke('secrets:set', SECRET_KEY, trimmed);
-      cached = trimmed;
-    } else {
-      await api.invoke('secrets:delete', SECRET_KEY);
-      cached = undefined;
-    }
+    await api.invoke('secrets:set', SECRET_KEY, trimmed);
+    cached = trimmed;
     loaded = true;
     return true;
-  } catch {
+  } catch (error) {
+    console.error('[languagetool] Could not save the access token:', error);
     return false;
   }
 }
 
 export async function clearApiKey(): Promise<boolean> {
-  return writeApiKey('');
+  const api = bridge();
+  if (!api) return false;
+
+  try {
+    await api.invoke('secrets:delete', SECRET_KEY);
+    cached = undefined;
+    loaded = true;
+    return true;
+  } catch (error) {
+    console.error('[languagetool] Could not remove the access token:', error);
+    return false;
+  }
 }

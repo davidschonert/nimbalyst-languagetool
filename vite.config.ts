@@ -1,3 +1,4 @@
+import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { createExtensionConfig } from '@nimbalyst/extension-sdk/vite';
 
@@ -7,5 +8,6 @@ import { createExtensionConfig } from '@nimbalyst/extension-sdk/vite';
 export default defineConfig(
   createExtensionConfig({
     entry: './src/index.ts',
+    plugins: [react({ jsxRuntime: 'automatic', jsxImportSource: 'react' })],
   }),
 );

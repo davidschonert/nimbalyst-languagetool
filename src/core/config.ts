@@ -1,24 +1,25 @@
 /**
  * Extension configuration.
  *
- * Two host behaviours shape this file:
+ * `services.configuration` only exists when the manifest declares
+ * `contributions.configuration`. The block is declared with no properties on
+ * purpose: the host renders its own field UI for every declared property, and
+ * that UI disables each input while it saves, which drops focus on every
+ * keystroke in a text field. With no properties declared the host panel renders
+ * nothing and the extension's own settings panel is the only one.
  *
- *   1. `services.configuration` only exists when the manifest declares
- *      `contributions.configuration`. Without that block it is undefined.
- *   2. The host loads the saved values into a cache once, asynchronously, at
- *      activation, and there is no change notification. A value edited in
- *      Settings is therefore picked up on the next extension reload rather
- *      than immediately.
+ * Nothing is lost by that. Config is stored as a plain key/value bag per
+ * extension id, so undeclared keys persist exactly the same way; only the
+ * host-rendered fields and the manifest-declared defaults go away, and the
+ * defaults live here instead.
  *
- * Values are read lazily at the point of use rather than captured at
- * activation. That does not fix (2), but it does avoid the startup race where
- * the cache has not resolved yet and every read returns the default.
+ * The host loads saved values into a cache once at activation and emits no
+ * change event. Writing through `update()` refreshes that cache, so a change
+ * made in our own panel applies immediately. Values are read lazily at the
+ * point of use, which also avoids the startup race where the cache has not
+ * resolved yet and every read returns a default.
  *
- * The cloud access token is deliberately absent. It belongs in Nimbalyst's
- * encrypted secret store, which a contributed Lexical extension cannot reach:
- * `ExtensionStorage` hangs off EditorHost, PanelHost and SettingsPanelProps,
- * and `ExtensionServices` carries no storage. Putting it here instead would
- * mean writing it to plain configuration, which is exactly what it must not be.
+ * The cloud access token is deliberately absent. See secrets.ts.
  */
 
 import type { ExtensionConfigurationService } from '@nimbalyst/extension-sdk';
@@ -28,7 +29,7 @@ import type { Backend, CheckOptions } from './client';
 /** How the correction card opens. */
 export type TriggerMode = 'click' | 'hover';
 
-const KEYS = {
+export const KEYS = {
   triggerMode: 'languagetool.triggerMode',
   backend: 'languagetool.backend',
   localUrl: 'languagetool.localUrl',
@@ -41,7 +42,7 @@ const KEYS = {
   username: 'languagetool.username',
 } as const;
 
-const DEFAULTS = {
+export const DEFAULTS = {
   triggerMode: 'click' as TriggerMode,
   backend: 'local' as Backend,
   localUrl: 'http://localhost:8081',
@@ -56,31 +57,40 @@ export function bindConfiguration(next: ExtensionConfigurationService | undefine
   service = next;
 }
 
-function readString(key: string, fallback: string): string {
+export function readString(key: string, fallback = ''): string {
   const value = service?.get<string>(key, fallback);
-  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  return typeof value === 'string' ? value : fallback;
 }
 
-function readBoolean(key: string): boolean {
+export function readBoolean(key: string): boolean {
   return service?.get<boolean>(key, false) === true;
 }
 
-/** Comma-separated in the settings UI, because the host has no list editor. */
+/** Comma-separated, because a single text field is the whole editor we need. */
 function readList(key: string): string[] {
-  return readString(key, '')
+  return readString(key)
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
 
+/** Writes through to the host and refreshes its cache, so the change is live. */
+export async function writeSetting(key: string, value: unknown): Promise<void> {
+  await service?.update(key, value, 'user');
+}
+
 export function triggerMode(): TriggerMode {
-  return service?.get<string>(KEYS.triggerMode, DEFAULTS.triggerMode) === 'hover'
-    ? 'hover'
-    : 'click';
+  return readString(KEYS.triggerMode, DEFAULTS.triggerMode) === 'hover' ? 'hover' : 'click';
 }
 
 export function backend(): Backend {
-  return service?.get<string>(KEYS.backend, DEFAULTS.backend) === 'cloud' ? 'cloud' : 'local';
+  return readString(KEYS.backend, DEFAULTS.backend) === 'cloud' ? 'cloud' : 'local';
+}
+
+export function baseUrlFor(selected: Backend): string {
+  return selected === 'cloud'
+    ? readString(KEYS.cloudUrl, DEFAULTS.cloudUrl) || DEFAULTS.cloudUrl
+    : readString(KEYS.localUrl, DEFAULTS.localUrl) || DEFAULTS.localUrl;
 }
 
 /**
@@ -91,20 +101,17 @@ export function checkOptions(): CheckOptions {
   const selected = backend();
   const options: CheckOptions = {
     backend: selected,
-    baseUrl:
-      selected === 'cloud'
-        ? readString(KEYS.cloudUrl, DEFAULTS.cloudUrl)
-        : readString(KEYS.localUrl, DEFAULTS.localUrl),
-    language: readString(KEYS.language, DEFAULTS.language),
+    baseUrl: baseUrlFor(selected),
+    language: readString(KEYS.language, DEFAULTS.language) || DEFAULTS.language,
     picky: readBoolean(KEYS.picky),
     disabledRules: readList(KEYS.disabledRules),
     disabledCategories: readList(KEYS.disabledCategories),
   };
 
-  const motherTongue = readString(KEYS.motherTongue, '');
+  const motherTongue = readString(KEYS.motherTongue).trim();
   if (motherTongue) options.motherTongue = motherTongue;
 
-  const username = readString(KEYS.username, '');
+  const username = readString(KEYS.username).trim();
   if (username) options.username = username;
 
   return options;
