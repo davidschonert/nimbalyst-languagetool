@@ -65,6 +65,32 @@ something ships, so this is the piece that makes the cloud backend useful withou
 `contributions.commands` is described as reserved for future contributions in the manifest
 reference, so a slash command may be the only route available today. Worth confirming.
 
+## Move secrets onto ExtensionStorage, once the host allows it
+
+Not work to schedule, but work to notice when it becomes possible.
+
+`core/secrets.ts` reaches the host's encrypted store over IPC rather than
+through `ExtensionStorage`, for two reasons. One of them is now fixed upstream
+and the other is not.
+
+[#1408](https://github.com/nimbalyst/nimbalyst/issues/1408), where colons in a
+scoped key made every write fail on Windows, is fixed but not yet in a release.
+When it ships, the stored token migrates on its own: the new filename carries a
+hash of the key, a read falls back to the pre-fix filename, and ours already is
+that filename.
+
+[#1407](https://github.com/nimbalyst/nimbalyst/issues/1407), where
+`ExtensionServices` carries no storage, is still open. It is the one that
+matters here, because it is why the runtime cannot read the token at load. Until
+it moves, the workaround stays.
+
+There is a trap in between. Once #1408 ships, the settings panel could switch to
+`storage.setSecret`, since panels do receive `storage`, and it would look like
+the supported fix. It would break the token: the host would write under a
+different key, so a different file from the one the runtime reads, and the panel
+would report success while the checker saw no token. Reading and writing move
+together or not at all.
+
 ## Inline suppression comments
 
 `@LT-IGNORE:<rule>(<text>)@` inside an HTML comment, borrowed from `vscode-languagetool-linter`.
