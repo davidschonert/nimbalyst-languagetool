@@ -27,22 +27,39 @@ function match(overrides: Partial<RawMatch> = {}): RawMatch {
 }
 
 describe('kindFor', () => {
-  it('maps misspellings to spelling', () => {
-    expect(kindFor('misspelling')).toBe('spelling');
-  });
+  /**
+   * Every row was observed by running one paragraph through both LanguageTool's
+   * editor and this extension, then pairing the color against the metadata.
+   * They are the reason the mapping keys off what it does.
+   */
+  const observed = [
+    // Red. Free servers say TYPOS; premium replaces it with an orthography
+    // rule whose category is GRAMMAR, and still colors it red.
+    { id: 'MORFOLOGIK_RULE_EN_US', issueType: 'misspelling', category: { id: 'TYPOS' }, kind: 'spelling' },
+    { id: 'QB_NEW_EN_ORTHOGRAPHY_ERROR_IDS_1', issueType: 'grammar', category: { id: 'GRAMMAR' }, kind: 'spelling' },
 
-  it('maps taste-based issue types to style', () => {
-    // DASH_RULE reports typographical, and is a house-style disagreement
-    // rather than an error.
-    for (const issueType of ['style', 'typographical', 'register', 'whitespace']) {
-      expect(kindFor(issueType)).toBe('style');
-    }
-  });
+    // Amber. Note the first: issueType says misspelling, LanguageTool shows
+    // amber, which is why issueType cannot decide red.
+    { id: 'QB_NEW_EN_DECAPITALIZE_ERROR_IDS_6', issueType: 'misspelling', category: { id: 'CASING' }, kind: 'grammar' },
+    { id: 'DASH_RULE', issueType: 'typographical', category: { id: 'PUNCTUATION' }, kind: 'grammar' },
+    { id: 'EN_A_VS_AN', issueType: 'misspelling', category: { id: 'MISC' }, kind: 'grammar' },
+    { id: 'ITS_TO_IT_S', issueType: 'grammar', category: { id: 'GRAMMAR' }, kind: 'grammar' },
+    { id: 'ENGLISH_WORD_REPEAT_RULE', issueType: 'duplication', category: { id: 'MISC' }, kind: 'grammar' },
 
-  it('falls back to grammar for anything else, including absent', () => {
-    expect(kindFor('grammar')).toBe('grammar');
-    expect(kindFor('duplication')).toBe('grammar');
-    expect(kindFor(undefined)).toBe('grammar');
+    // Blue. The categories differ, the issue type does not.
+    { id: 'EN_WORDINESS_PREMIUM_DUE_TO_THE_FACT_THAT', issueType: 'style', category: { id: 'STYLE' }, kind: 'style' },
+    { id: 'IN_ORDER_TO_PREMIUM', issueType: 'style', category: { id: 'REDUNDANCY' }, kind: 'style' },
+    { id: 'EN_REPEATEDWORDS_AFFECT', issueType: 'style', category: { id: 'REPETITIONS_STYLE' }, kind: 'style' },
+  ] as const;
+
+  for (const { kind, ...rule } of observed) {
+    it(`colors ${rule.id} as ${kind}`, () => {
+      expect(kindFor(rule)).toBe(kind);
+    });
+  }
+
+  it('falls back to grammar when the service sends no issue type', () => {
+    expect(kindFor({ id: 'UNKNOWN_RULE' })).toBe('grammar');
   });
 });
 
