@@ -75,6 +75,12 @@ const CHECK_PATH = '/v2/check';
 const ADD_WORD_PATH = '/v2/words/add';
 
 /**
+ * The account copy is a bonus rather than the thing that makes a word work, so
+ * it gets a bound rather than the platform's TCP timeout. Nothing waits on it.
+ */
+const ADD_WORD_TIMEOUT_MS = 10_000;
+
+/**
  * Add a word to the LanguageTool account's own dictionary.
  *
  * This writes to the user's account, so it also changes what the browser
@@ -83,6 +89,10 @@ const ADD_WORD_PATH = '/v2/words/add';
  *
  * The endpoint takes the same credentials as a check and rejects a username
  * without an apiKey the same way, with a plain-text body.
+ *
+ * A 200 is not the answer. The service reports a refused word — one already in
+ * the account, or one it will not accept — as `{"added": false}` with a 200, so
+ * the body is what decides, and anything but `true` throws.
  */
 export async function addWordToAccount(
   word: string,
@@ -101,6 +111,7 @@ export async function addWordToAccount(
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
+      signal: AbortSignal.timeout(ADD_WORD_TIMEOUT_MS),
     });
   } catch {
     throw new CheckError('offline', `Could not reach LanguageTool at ${url}.`);
@@ -111,6 +122,17 @@ export async function addWordToAccount(
     const kind: CheckErrorKind =
       response.status === 401 || response.status === 403 ? 'auth' : 'http';
     throw new CheckError(kind, detail.slice(0, 200) || response.statusText, response.status);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new CheckError('malformed', 'LanguageTool returned a response that was not JSON.');
+  }
+
+  if ((payload as { added?: unknown }).added !== true) {
+    throw new CheckError('http', 'LanguageTool did not add the word.', response.status);
   }
 }
 

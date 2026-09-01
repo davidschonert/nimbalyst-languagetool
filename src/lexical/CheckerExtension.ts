@@ -17,7 +17,7 @@ import { $getNodeByKey, $isTextNode, defineExtension, type LexicalEditor } from 
 import { buildAnnotatedDocument, type AnnotatedDocument } from '../core/annotate';
 import { check, CheckError, type Backend, type CheckErrorKind } from '../core/client';
 import { backend, checkOptions, triggerMode } from '../core/config';
-import { addWord, isIgnored } from '../core/dictionary';
+import { addWord, dictionaryEnabled, isIgnored } from '../core/dictionary';
 import { anchorMatches } from '../core/matches';
 import { readApiKey } from '../core/secrets';
 import type { AnchoredMatch } from '../core/types';
@@ -87,7 +87,11 @@ export const LanguageToolExtension = defineExtension({
         matches = matches.filter((entry) => entry !== anchor);
         layer.setMatches(matches);
       },
+      canAddToDictionary: dictionaryEnabled,
       onAddToDictionary: (anchor) => {
+        // Resolves on the local write. The account copy is its own promise and
+        // is deliberately not awaited, so an unreachable account never leaves
+        // the word underlined.
         void addWord(anchor.match.word).then((result) => {
           if (!result.added) return;
           // Drop every occurrence now rather than leaving them underlined

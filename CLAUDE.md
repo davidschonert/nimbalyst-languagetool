@@ -94,6 +94,14 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
 
 - Document text leaves the machine only when the cloud backend is explicitly selected. Local is the
   default and must stay the default.
+- The personal dictionary's account push is the one exception, and it is meant to stay the only one.
+  With `languagetool.dictionaryPushToCloud` turned on, `dictionary.ts` sends a single added word to
+  `api.languagetoolplus.com` on either backend, because the account dictionary it writes to is a
+  cloud object and applies to every LanguageTool client the user runs, not just this one. It is off
+  by default, it fires per word at the moment the user asks for it, and it sends nothing but that
+  word. Anything that would widen it — a batch upload, a background sync, a read-back — is a new
+  decision, not a continuation of this one. `README.md` states the same exception in the user's
+  words, and the two move together.
 - The access token never goes into configuration, into the repo, or into a settings file. It goes
   only into Nimbalyst's encrypted secret store. `config.test.ts` asserts that `checkOptions()`
   carries no `apiKey`.

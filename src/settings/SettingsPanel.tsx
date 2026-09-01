@@ -18,7 +18,7 @@
  * secrets.ts.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SettingsPanelProps } from '@nimbalyst/extension-sdk';
 
 import type { Backend } from '../core/client';
@@ -96,6 +96,8 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
   const [dictionaryOn, setDictionaryOn] = useState(true);
   const [pushWords, setPushWords] = useState(false);
   const [wordNote, setWordNote] = useState('');
+  /** Which add the note belongs to, so a slow account push cannot overwrite a newer one. */
+  const wordAttempt = useRef(0);
 
   const [tokenDraft, setTokenDraft] = useState('');
   const [hasToken, setHasToken] = useState(false);
@@ -151,27 +153,44 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
   }, []);
 
   const saveWord = useCallback(async () => {
-    const result = await addWord(wordDraft);
+    const draft = wordDraft.trim();
+    // The button is disabled for a blank draft, but Enter reaches here too, and
+    // "nothing to add" must not be reported as "already in the list".
+    if (!draft) return;
+
+    const result = await addWord(draft);
     if (!result.added) {
       setWordNote('That word is already in the list.');
       return;
     }
+
+    // The local add is done, so the field clears now rather than waiting on a
+    // network round trip that the word does not depend on.
     setWordDraft('');
     setWords(dictionaryWords());
-    // The local add has already succeeded here, so this only reports the
-    // account copy, which can fail without the word ceasing to work.
+    setWordNote(pushWords ? `Added here. Sending ${draft} to your account…` : '');
+
+    // Only the account copy is left to report, and it can fail without the word
+    // ceasing to work. A second add landing first wins the note, which is right:
+    // it is the newer one.
+    const attempt = ++wordAttempt.current;
+    const cloud = await result.cloud;
+    if (attempt !== wordAttempt.current) return;
     setWordNote(
-      result.cloud === 'added'
+      cloud === 'added'
         ? 'Added here and to your LanguageTool account.'
-        : result.cloud === 'failed'
+        : cloud === 'failed'
           ? 'Added here. Could not reach your LanguageTool account, so it is not there.'
-          : result.cloud === 'unavailable'
+          : cloud === 'unavailable'
             ? 'Added here. Your account needs a username and token before words can go there too.'
             : '',
     );
-  }, [wordDraft]);
+  }, [wordDraft, pushWords]);
 
   const dropWord = useCallback(async (word: string) => {
+    // Claims the note too, so an account push still in flight cannot put its
+    // result back after the user has moved on to removing something.
+    wordAttempt.current += 1;
     await removeWord(word);
     setWords(dictionaryWords());
     setWordNote('');
@@ -439,7 +458,7 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
             spellCheck={false}
             onChange={(event) => setWordDraft(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === 'Enter') void saveWord();
+              if (event.key === 'Enter' && wordDraft.trim()) void saveWord();
             }}
           />
           <button

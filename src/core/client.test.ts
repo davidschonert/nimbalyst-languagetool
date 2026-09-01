@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AnnotatedDocument } from './annotate';
-import { check, CheckError, type CheckOptions } from './client';
+import { addWordToAccount, check, CheckError, type CheckOptions } from './client';
 
 const doc: AnnotatedDocument = {
   annotation: [{ text: 'The server are running.' }],
@@ -182,5 +182,44 @@ describe('failure handling', () => {
     );
 
     await expect(check(doc, local)).rejects.toBeInstanceOf(DOMException);
+  });
+});
+
+describe('adding a word to the account', () => {
+  const account = { baseUrl: 'https://cloud.example/', username: 'a@b.com', apiKey: 'k' };
+
+  it('posts the word and both credentials to the words endpoint', async () => {
+    const fetchMock = respondWith({ added: true });
+
+    await expect(addWordToAccount('Flosum', account)).resolves.toBeUndefined();
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://cloud.example/v2/words/add');
+    const body = sentBody(fetchMock);
+    expect(body.get('word')).toBe('Flosum');
+    expect(body.get('username')).toBe('a@b.com');
+    expect(body.get('apiKey')).toBe('k');
+  });
+
+  it('rejects a 200 that says the word was not added', async () => {
+    // The service refuses a word with a 200 and `added: false`. Trusting the
+    // status alone tells the user their account has a word it does not have.
+    respondWith({ added: false });
+    await expect(addWordToAccount('Flosum', account)).rejects.toBeInstanceOf(CheckError);
+  });
+
+  it('rejects a 200 whose body says nothing about it', async () => {
+    respondWith({});
+    await expect(addWordToAccount('Flosum', account)).rejects.toMatchObject({ kind: 'http' });
+  });
+
+  it('reports rejected credentials as auth rather than a generic failure', async () => {
+    respondWith('nope', { ok: false, status: 403 });
+    await expect(addWordToAccount('Flosum', account)).rejects.toMatchObject({ kind: 'auth' });
+  });
+
+  it('gives the request a deadline, so an unreachable account cannot hang', async () => {
+    const fetchMock = respondWith({ added: true });
+    await addWordToAccount('Flosum', account);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
   });
 });

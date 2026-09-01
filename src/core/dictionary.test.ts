@@ -49,7 +49,9 @@ describe('adding', () => {
   it('stores the word and starts ignoring it', async () => {
     const values = bind();
 
-    expect(await addWord('Flosum')).toEqual({ added: true, cloud: 'off' });
+    const result = await addWord('Flosum');
+    expect(result.added).toBe(true);
+    expect(await result.cloud).toBe('off');
     expect(values[KEYS.dictionary]).toEqual(['Flosum']);
     expect(isIgnored('Flosum')).toBe(true);
   });
@@ -136,7 +138,7 @@ describe('the account copy', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
-    expect((await addWord('Flosum')).cloud).toBe('off');
+    expect(await (await addWord('Flosum')).cloud).toBe('off');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -146,7 +148,7 @@ describe('the account copy', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
-    expect((await addWord('Flosum')).cloud).toBe('unavailable');
+    expect(await (await addWord('Flosum')).cloud).toBe('unavailable');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -161,10 +163,11 @@ describe('the account copy', () => {
       ok: true,
       status: 200,
       text: async () => '',
+      json: async () => ({ added: true }),
     }));
     vi.stubGlobal('fetch', fetchMock);
 
-    expect((await addWord('Flosum')).cloud).toBe('added');
+    expect(await (await addWord('Flosum')).cloud).toBe('added');
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe('https://cloud.example/v2/words/add');
@@ -187,7 +190,90 @@ describe('the account copy', () => {
       vi.fn(async () => ({ ok: false, status: 403, statusText: 'Forbidden', text: async () => 'no' })),
     );
 
-    expect(await addWord('Flosum')).toEqual({ added: true, cloud: 'failed' });
+    const result = await addWord('Flosum');
+    expect(result.added).toBe(true);
+    expect(await result.cloud).toBe('failed');
     expect(dictionaryWords()).toEqual(['Flosum']);
+  });
+
+  it('reports failure when the service answers 200 but says it did not add it', async () => {
+    // /v2/words/add refuses a word with a 200 and `added: false`, so the status
+    // alone would report a word that never reached the account as added.
+    bind({ [KEYS.dictionaryPushToCloud]: true, [KEYS.username]: 'a@b.com' });
+    bridgeWithToken('secret-token');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => '',
+        json: async () => ({ added: false }),
+      })),
+    );
+
+    expect(await (await addWord('Flosum')).cloud).toBe('failed');
+    expect(dictionaryWords()).toEqual(['Flosum']);
+  });
+
+  it('does not make the local add wait for the account round trip', async () => {
+    // The word works because it is in the local list. Gating on the network
+    // would leave it underlined until an unreachable account timed out.
+    const values = bind({ [KEYS.dictionaryPushToCloud]: true, [KEYS.username]: 'a@b.com' });
+    bridgeWithToken('secret-token');
+
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        await held;
+        return { ok: true, status: 200, text: async () => '', json: async () => ({ added: true }) };
+      }),
+    );
+
+    const result = await addWord('Flosum');
+    expect(result.added).toBe(true);
+    expect(values[KEYS.dictionary]).toEqual(['Flosum']);
+    expect(isIgnored('Flosum')).toBe(true);
+
+    release();
+    expect(await result.cloud).toBe('added');
+  });
+});
+
+describe('two edits at once', () => {
+  /** A store that writes asynchronously, which is what makes the race possible. */
+  function bindSlow(initial: Record<string, unknown> = {}): Record<string, unknown> {
+    const values: Record<string, unknown> = { ...initial };
+    bindConfiguration({
+      get: <T,>(key: string, fallback?: T) => (key in values ? (values[key] as T) : (fallback as T)),
+      update: async (key: string, value: unknown) => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        values[key] = value;
+      },
+      getAll: () => values,
+    });
+    return values;
+  }
+
+  it('keeps both words when two adds are in flight together', async () => {
+    bindSlow();
+    await Promise.all([addWord('Flosum'), addWord('Nimbalyst')]);
+    expect(dictionaryWords()).toEqual(['Flosum', 'Nimbalyst']);
+  });
+
+  it('does not resurrect a removed word when an add starts before the write lands', async () => {
+    bindSlow({ [KEYS.dictionary]: ['Flosum', 'Salesforce'] });
+    await Promise.all([removeWord('Salesforce'), addWord('Nimbalyst')]);
+    expect(dictionaryWords()).toEqual(['Flosum', 'Nimbalyst']);
+  });
+
+  it('still refuses a duplicate raced against its own first add', async () => {
+    bindSlow();
+    const [first, second] = await Promise.all([addWord('Flosum'), addWord('flosum')]);
+    expect([first.added, second.added].filter(Boolean)).toHaveLength(1);
+    expect(dictionaryWords()).toHaveLength(1);
   });
 });
