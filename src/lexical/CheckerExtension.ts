@@ -17,6 +17,7 @@ import { $getNodeByKey, $isTextNode, defineExtension, type LexicalEditor } from 
 import { buildAnnotatedDocument, type AnnotatedDocument } from '../core/annotate';
 import { check, CheckError, type Backend, type CheckErrorKind } from '../core/client';
 import { backend, checkOptions, triggerMode } from '../core/config';
+import { addWord, isIgnored } from '../core/dictionary';
 import { anchorMatches } from '../core/matches';
 import { readApiKey } from '../core/secrets';
 import type { AnchoredMatch } from '../core/types';
@@ -86,6 +87,16 @@ export const LanguageToolExtension = defineExtension({
         matches = matches.filter((entry) => entry !== anchor);
         layer.setMatches(matches);
       },
+      onAddToDictionary: (anchor) => {
+        void addWord(anchor.match.word).then((added) => {
+          if (!added) return;
+          // Drop every occurrence now rather than leaving them underlined
+          // until the next check. isIgnored is the single source of truth for
+          // what counts as a match, so the filter cannot drift from it.
+          matches = matches.filter((entry) => !isIgnored(entry.match.word));
+          layer.setMatches(matches);
+        });
+      },
       onIgnoreRule: (anchor) => {
         ignoredRules.add(anchor.match.ruleId);
         matches = matches.filter((entry) => entry.match.ruleId !== anchor.match.ruleId);
@@ -127,7 +138,7 @@ export const LanguageToolExtension = defineExtension({
         if (token !== checkToken || version !== docVersion) return;
 
         reportedFailure = undefined;
-        matches = anchorMatches(doc, raw).filter(
+        matches = anchorMatches(doc, raw, isIgnored).filter(
           (anchor) => !ignoredAnchors.has(anchorId(anchor)),
         );
         layer.setMatches(matches);

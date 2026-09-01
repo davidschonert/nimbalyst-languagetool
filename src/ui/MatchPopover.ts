@@ -20,6 +20,8 @@ export interface PopoverActions {
   onIgnore: (anchor: AnchoredMatch) => void;
   /** Stop reporting this rule entirely. */
   onIgnoreRule: (anchor: AnchoredMatch) => void;
+  /** Add the flagged word to the personal dictionary. */
+  onAddToDictionary: (anchor: AnchoredMatch) => void;
   /** The card closed, by whichever route. */
   onClose: () => void;
 }
@@ -160,6 +162,22 @@ export class MatchPopover {
         });
         this.actionRow.append(button);
       }
+    }
+
+    // Only for a single flagged word. A dictionary entry says "this word is
+    // fine", which cannot sensibly be offered for a multi-word grammar match.
+    const word = match.word.trim();
+    if (word && !/\s/.test(word)) {
+      const addToDictionary = document.createElement('button');
+      addToDictionary.type = 'button';
+      addToDictionary.className = 'lt-card__ignore';
+      addToDictionary.textContent = `Add ${word}`;
+      addToDictionary.title = `Add "${word}" to your personal dictionary`;
+      addToDictionary.addEventListener('click', () => {
+        this.actions.onAddToDictionary(anchor);
+        this.hide();
+      });
+      this.actionRow.append(addToDictionary);
     }
 
     const ignore = document.createElement('button');

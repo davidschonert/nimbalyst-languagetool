@@ -40,6 +40,8 @@ export interface RawMatch {
   message: string;
   shortMessage?: string;
   replacements?: Array<{ value: string }>;
+  /** Carries the flagged fragment, so reading the editor state is not needed. */
+  context?: { text: string; offset: number; length: number };
   rule: {
     id: string;
     issueType?: string;

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AnnotatedDocument } from './annotate';
 import type { RawMatch } from './client';
-import { anchorMatches, kindFor } from './matches';
+import { anchorMatches, flaggedText, kindFor } from './matches';
 
 /**
  * "Alpha beta." as markup, then " gamma delta." as prose. Offsets 0-10 are
@@ -20,6 +20,7 @@ function match(overrides: Partial<RawMatch> = {}): RawMatch {
     message: 'Possible spelling mistake found.',
     shortMessage: 'Spelling mistake',
     replacements: [{ value: 'gamma' }],
+    context: { text: ' gamma delta.', offset: 1, length: 5 },
     rule: { id: 'RULE_ID', issueType: 'misspelling', category: { id: 'TYPOS', name: 'Typo' } },
     ...overrides,
   };
@@ -42,6 +43,16 @@ describe('kindFor', () => {
     expect(kindFor('grammar')).toBe('grammar');
     expect(kindFor('duplication')).toBe('grammar');
     expect(kindFor(undefined)).toBe('grammar');
+  });
+});
+
+describe('flaggedText', () => {
+  it('slices the fragment out of the context the service returned', () => {
+    expect(flaggedText(match())).toBe('gamma');
+  });
+
+  it('returns empty when the service omitted the context', () => {
+    expect(flaggedText(match({ context: undefined }))).toBe('');
   });
 });
 
@@ -76,6 +87,27 @@ describe('anchorMatches', () => {
     // Style rules routinely return an empty shortMessage.
     const [anchored] = anchorMatches(doc, [match({ shortMessage: '' })]);
     expect(anchored?.match.title).toBe('Possible spelling mistake found.');
+  });
+
+  it('carries the flagged word, which is what the dictionary acts on', () => {
+    const [anchored] = anchorMatches(doc, [match()]);
+    expect(anchored?.match.word).toBe('gamma');
+  });
+
+  it('drops a match whose word is in the dictionary', () => {
+    const ignored = (word: string) => word.toLocaleLowerCase() === 'gamma';
+    expect(anchorMatches(doc, [match()], ignored)).toHaveLength(0);
+  });
+
+  it('keeps a match the dictionary does not cover', () => {
+    const ignored = (word: string) => word === 'something else';
+    expect(anchorMatches(doc, [match()], ignored)).toHaveLength(1);
+  });
+
+  it('cannot drop a match whose context is missing, since there is no word', () => {
+    // Falling back to "ignore it" would silently hide real matches.
+    const ignored = () => true;
+    expect(anchorMatches(doc, [match({ context: undefined })], ignored)).toHaveLength(1);
   });
 
   it('tolerates a match with no replacements', () => {

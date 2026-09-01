@@ -7,16 +7,6 @@ repeat this list, because two lists drift apart.
 Each entry carries the constraint behind it rather than only a title. The numbers and the reasons
 are the part that is expensive to recover later.
 
-## Personal dictionary
-
-Product names are reported as misspellings. "Flosum" comes back as `MORFOLOGIK_RULE_EN_US` on every
-release note, so the checker is at its noisiest on exactly the documents it is most wanted for.
-
-Words should be added from the correction card and persist across workspaces. Note that
-`ExtensionStorage` is not reachable from a contributed Lexical extension, which is the same problem
-the access token has. Dictionary words are not secret, so they can go through
-`contributions.configuration` and `writeSetting()` instead of the IPC path `secrets.ts` uses.
-
 ## Chunking
 
 The service rejects a single request over 20,000 characters on the free tier and 60,000 on Premium.

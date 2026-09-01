@@ -24,6 +24,7 @@ import type { SettingsPanelProps } from '@nimbalyst/extension-sdk';
 import type { Backend } from '../core/client';
 import { CheckError, testConnection } from '../core/client';
 import { DEFAULTS, KEYS, readBoolean, readString, writeSetting } from '../core/config';
+import { addWord, dictionaryWords, removeWord } from '../core/dictionary';
 import { clearApiKey, hasApiKey, readApiKey, writeApiKey } from '../core/secrets';
 
 type TestState =
@@ -90,6 +91,9 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
   const [disabledCategories, setDisabledCategories] = useState('');
   const [triggerMode, setTriggerMode] = useState(DEFAULTS.triggerMode);
 
+  const [words, setWords] = useState<string[]>([]);
+  const [wordDraft, setWordDraft] = useState('');
+
   const [tokenDraft, setTokenDraft] = useState('');
   const [hasToken, setHasToken] = useState(false);
   const [test, setTest] = useState<TestState>({ status: 'idle' });
@@ -105,6 +109,8 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
     setDisabledRules(readString(KEYS.disabledRules));
     setDisabledCategories(readString(KEYS.disabledCategories));
     setTriggerMode(readString(KEYS.triggerMode, DEFAULTS.triggerMode) === 'hover' ? 'hover' : 'click');
+
+    setWords(dictionaryWords());
 
     // Only whether one exists. The value is never shown.
     void hasApiKey().then(setHasToken);
@@ -137,6 +143,17 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
     setHasToken(false);
     setTokenDraft('');
     setTest({ status: 'idle' });
+  }, []);
+
+  const saveWord = useCallback(async () => {
+    if (!(await addWord(wordDraft))) return;
+    setWordDraft('');
+    setWords(dictionaryWords());
+  }, [wordDraft]);
+
+  const dropWord = useCallback(async (word: string) => {
+    await removeWord(word);
+    setWords(dictionaryWords());
   }, []);
 
   const runTest = useCallback(async () => {
@@ -347,6 +364,56 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
             save(KEYS.disabledCategories, next);
           }}
         />
+      </section>
+
+      <section className="lt-section">
+        <h4 className="lt-section__title">Dictionary</h4>
+        <p className="lt-section__note">
+          Words here are never reported. Add them from the correction card, or type one below.
+        </p>
+
+        <div className="lt-token">
+          <input
+            className="lt-field__input"
+            type="text"
+            value={wordDraft}
+            placeholder="Add a word"
+            spellCheck={false}
+            onChange={(event) => setWordDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void saveWord();
+            }}
+          />
+          <button
+            type="button"
+            className="lt-button"
+            disabled={!wordDraft.trim()}
+            onClick={() => void saveWord()}
+          >
+            Add
+          </button>
+        </div>
+
+        {words.length === 0 ? (
+          <p className="lt-field__hint">No words yet.</p>
+        ) : (
+          <ul className="lt-words">
+            {words.map((word) => (
+              <li key={word} className="lt-word">
+                <span>{word}</span>
+                <button
+                  type="button"
+                  className="lt-word__remove"
+                  aria-label={`Remove ${word}`}
+                  title={`Remove ${word}`}
+                  onClick={() => void dropWord(word)}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section className="lt-section">
