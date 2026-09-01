@@ -26,7 +26,8 @@ Document text is sent to the cloud backend only when you choose it. The access t
 - [x] Markdown-aware checking, built from the Lexical node tree so syntax is not flagged
 - [x] Both backends, with local as the default
 - [x] Settings panel: backend, credentials, language, rule and category disabling, `picky`
-- [x] Personal dictionary, so your own vocabulary stops being reported as misspellings
+- [x] Personal dictionary, so your own vocabulary stops being reported as misspellings, with an
+      option to add new words to your LanguageTool account as well
 
 Everything still missing is in [ROADMAP.md](ROADMAP.md), with the constraint behind each item.
 The next one is chunking, which is the only fix for a document larger than the service will accept

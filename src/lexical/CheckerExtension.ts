@@ -88,8 +88,8 @@ export const LanguageToolExtension = defineExtension({
         layer.setMatches(matches);
       },
       onAddToDictionary: (anchor) => {
-        void addWord(anchor.match.word).then((added) => {
-          if (!added) return;
+        void addWord(anchor.match.word).then((result) => {
+          if (!result.added) return;
           // Drop every occurrence now rather than leaving them underlined
           // until the next check. isIgnored is the single source of truth for
           // what counts as a match, so the filter cannot drift from it.

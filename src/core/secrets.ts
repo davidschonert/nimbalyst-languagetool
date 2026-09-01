@@ -50,6 +50,10 @@ let loaded = false;
 let warned = false;
 
 function bridge(): ElectronBridge | undefined {
+  // Guarded rather than assumed: reading `window` where it does not exist
+  // throws rather than yielding undefined, and this module is reachable from
+  // tests and from anything that runs outside a document.
+  if (typeof window === 'undefined') return undefined;
   const candidate = (window as unknown as { electronAPI?: ElectronBridge }).electronAPI;
   return typeof candidate?.invoke === 'function' ? candidate : undefined;
 }
@@ -107,6 +111,13 @@ export async function writeApiKey(value: string): Promise<boolean> {
     console.error('[languagetool] Could not save the access token:', error);
     return false;
   }
+}
+
+/** Drop the cached value, so the next read goes back to the store. */
+export function invalidateApiKey(): void {
+  cached = undefined;
+  loaded = false;
+  warned = false;
 }
 
 export async function clearApiKey(): Promise<boolean> {

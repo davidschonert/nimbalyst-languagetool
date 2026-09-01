@@ -93,6 +93,9 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
 
   const [words, setWords] = useState<string[]>([]);
   const [wordDraft, setWordDraft] = useState('');
+  const [dictionaryOn, setDictionaryOn] = useState(true);
+  const [pushWords, setPushWords] = useState(false);
+  const [wordNote, setWordNote] = useState('');
 
   const [tokenDraft, setTokenDraft] = useState('');
   const [hasToken, setHasToken] = useState(false);
@@ -111,6 +114,8 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
     setTriggerMode(readString(KEYS.triggerMode, DEFAULTS.triggerMode) === 'hover' ? 'hover' : 'click');
 
     setWords(dictionaryWords());
+    setDictionaryOn(readBoolean(KEYS.dictionaryEnabled, true));
+    setPushWords(readBoolean(KEYS.dictionaryPushToCloud));
 
     // Only whether one exists. The value is never shown.
     void hasApiKey().then(setHasToken);
@@ -146,14 +151,30 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
   }, []);
 
   const saveWord = useCallback(async () => {
-    if (!(await addWord(wordDraft))) return;
+    const result = await addWord(wordDraft);
+    if (!result.added) {
+      setWordNote('That word is already in the list.');
+      return;
+    }
     setWordDraft('');
     setWords(dictionaryWords());
+    // The local add has already succeeded here, so this only reports the
+    // account copy, which can fail without the word ceasing to work.
+    setWordNote(
+      result.cloud === 'added'
+        ? 'Added here and to your LanguageTool account.'
+        : result.cloud === 'failed'
+          ? 'Added here. Could not reach your LanguageTool account, so it is not there.'
+          : result.cloud === 'unavailable'
+            ? 'Added here. Your account needs a username and token before words can go there too.'
+            : '',
+    );
   }, [wordDraft]);
 
   const dropWord = useCallback(async (word: string) => {
     await removeWord(word);
     setWords(dictionaryWords());
+    setWordNote('');
   }, []);
 
   const runTest = useCallback(async () => {
@@ -369,8 +390,45 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
       <section className="lt-section">
         <h4 className="lt-section__title">Dictionary</h4>
         <p className="lt-section__note">
-          Words here are never reported. Add them from the correction card, or type one below.
+          Words here are never reported, on either backend. Add them from the correction card, or
+          type one below.
         </p>
+
+        <label className="lt-toggle">
+          <input
+            type="checkbox"
+            checked={dictionaryOn}
+            onChange={(event) => {
+              setDictionaryOn(event.target.checked);
+              save(KEYS.dictionaryEnabled, event.target.checked);
+            }}
+          />
+          <span>
+            <span className="lt-field__label">Use this dictionary</span>
+            <span className="lt-field__hint">
+              Turning it off keeps every word, so you can rely on your LanguageTool account
+              dictionary alone without losing what you have collected here.
+            </span>
+          </span>
+        </label>
+
+        <label className="lt-toggle">
+          <input
+            type="checkbox"
+            checked={pushWords}
+            onChange={(event) => {
+              setPushWords(event.target.checked);
+              save(KEYS.dictionaryPushToCloud, event.target.checked);
+            }}
+          />
+          <span>
+            <span className="lt-field__label">Also add new words to my LanguageTool account</span>
+            <span className="lt-field__hint">
+              Needs the cloud username and token. This changes your account, so it affects the
+              browser extension too. Words are only ever added, never removed.
+            </span>
+          </span>
+        </label>
 
         <div className="lt-token">
           <input
@@ -393,6 +451,8 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
             Add
           </button>
         </div>
+
+        {wordNote ? <p className="lt-field__hint">{wordNote}</p> : null}
 
         {words.length === 0 ? (
           <p className="lt-field__hint">No words yet.</p>

@@ -12,9 +12,41 @@
  * contributed Lexical extension can actually reach. Writes go through
  * `writeSetting`, which is user-scoped, so the dictionary follows the user
  * across workspaces.
+ *
+ * LanguageTool accounts have their own dictionary, which the cloud service
+ * applies on its own and which is shared with the browser extension. The two
+ * are deliberately NOT synchronised. Adding a word can push it to the account
+ * as well, but only when the user has turned that on, and nothing is ever read
+ * back or deleted remotely. Sync would mean conflict resolution and deletion
+ * propagation for a list edited a few times a year, and a word wrongly removed
+ * from the account would affect every other LanguageTool client.
  */
 
-import { KEYS, readArray, writeSetting } from './config';
+import { addWordToAccount } from './client';
+import {
+  baseUrlFor,
+  KEYS,
+  readArray,
+  readBoolean,
+  readString,
+  writeSetting,
+} from './config';
+import { readApiKey } from './secrets';
+
+/** What happened to the account copy, which is reported separately. */
+export type CloudResult =
+  /** The user has not turned the account push on. */
+  | 'off'
+  /** Turned on, but no username and token are configured. */
+  | 'unavailable'
+  | 'added'
+  | 'failed';
+
+export interface AddResult {
+  /** Whether the word joined the local list. */
+  added: boolean;
+  cloud: CloudResult;
+}
 
 /**
  * Words are compared case-insensitively but stored as the user added them, so
@@ -30,6 +62,25 @@ export function dictionaryWords(): string[] {
 }
 
 /**
+ * Whether the list is being applied. Turning it off leaves every word in place,
+ * so someone using the cloud backend can rely on their account dictionary alone
+ * without losing what they have collected here.
+ */
+export function dictionaryEnabled(): boolean {
+  return readBoolean(KEYS.dictionaryEnabled, true);
+}
+
+export function pushesToCloud(): boolean {
+  return readBoolean(KEYS.dictionaryPushToCloud, false);
+}
+
+/** Present in the list, whether or not the list is currently applied. */
+function contains(word: string): boolean {
+  const candidate = normalize(word);
+  return Boolean(candidate) && dictionaryWords().some((entry) => normalize(entry) === candidate);
+}
+
+/**
  * Whether a flagged fragment should be suppressed.
  *
  * Compares the whole fragment rather than the words inside it. A dictionary
@@ -37,20 +88,49 @@ export function dictionaryWords(): string[] {
  * that happens to span it along with several others.
  */
 export function isIgnored(flagged: string): boolean {
-  const candidate = normalize(flagged);
-  if (!candidate) return false;
-  return dictionaryWords().some((word) => normalize(word) === candidate);
+  return dictionaryEnabled() && contains(flagged);
 }
 
-/** Returns false when the word is empty or already present. */
-export async function addWord(word: string): Promise<boolean> {
+/**
+ * Push a word to the LanguageTool account. Never throws: the local add has
+ * already succeeded by this point, and the account copy is a bonus rather than
+ * the thing that makes the word work.
+ */
+async function pushWord(word: string): Promise<CloudResult> {
+  if (!pushesToCloud()) return 'off';
+
+  const username = readString(KEYS.username).trim();
+  const apiKey = await readApiKey();
+  if (!username || !apiKey) return 'unavailable';
+
+  try {
+    await addWordToAccount(word, { baseUrl: baseUrlFor('cloud'), username, apiKey });
+    return 'added';
+  } catch (error) {
+    console.warn('[languagetool] Could not add the word to your account:', error);
+    return 'failed';
+  }
+}
+
+/**
+ * Add a word locally, and to the account when that is turned on.
+ *
+ * The local list is written first and independently, so a word always works
+ * immediately even when the account copy fails or is not configured.
+ */
+export async function addWord(word: string): Promise<AddResult> {
   const trimmed = word.trim();
-  if (!trimmed || isIgnored(trimmed)) return false;
+  if (!trimmed || contains(trimmed)) return { added: false, cloud: 'off' };
 
   await writeSetting(KEYS.dictionary, [...dictionaryWords(), trimmed]);
-  return true;
+  return { added: true, cloud: await pushWord(trimmed) };
 }
 
+/**
+ * Removes from the local list only. The account copy is deliberately left
+ * alone, since deleting from it would change what every other LanguageTool
+ * client reports.
+ */
 export async function removeWord(word: string): Promise<void> {
   const target = normalize(word);
   const remaining = dictionaryWords().filter((entry) => normalize(entry) !== target);

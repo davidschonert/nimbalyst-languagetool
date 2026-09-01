@@ -55,6 +55,18 @@ something ships, so this is the piece that makes the cloud backend useful withou
 `contributions.commands` is described as reserved for future contributions in the manifest
 reference, so a slash command may be the only route available today. Worth confirming.
 
+## Import an existing LanguageTool account dictionary
+
+Words can be pushed to the account when the user turns that on, but nothing is
+ever read back, so words already saved in a LanguageTool account are still
+reported here. `GET /v2/words` would fetch them, with the same credentials the
+push already uses.
+
+Deliberately left out for now because it is only worth building for someone who
+already has a populated account dictionary. The two lists are not synchronised
+and are not meant to be: an import would be a one-off action the user asks for,
+not a background reconciliation.
+
 ## Move secrets onto ExtensionStorage, once the host allows it
 
 Not work to schedule, but work to notice when it becomes possible.

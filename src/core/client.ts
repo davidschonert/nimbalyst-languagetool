@@ -72,6 +72,47 @@ export class CheckError extends Error {
 }
 
 const CHECK_PATH = '/v2/check';
+const ADD_WORD_PATH = '/v2/words/add';
+
+/**
+ * Add a word to the LanguageTool account's own dictionary.
+ *
+ * This writes to the user's account, so it also changes what the browser
+ * extension and any other LanguageTool client report. It is only ever called
+ * when the user has turned that on explicitly.
+ *
+ * The endpoint takes the same credentials as a check and rejects a username
+ * without an apiKey the same way, with a plain-text body.
+ */
+export async function addWordToAccount(
+  word: string,
+  options: { baseUrl: string; username: string; apiKey: string },
+): Promise<void> {
+  const body = new URLSearchParams();
+  body.set('word', word);
+  body.set('username', options.username);
+  body.set('apiKey', options.apiKey);
+
+  const url = options.baseUrl.replace(/\/+$/, '') + ADD_WORD_PATH;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+  } catch {
+    throw new CheckError('offline', `Could not reach LanguageTool at ${url}.`);
+  }
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    const kind: CheckErrorKind =
+      response.status === 401 || response.status === 403 ? 'auth' : 'http';
+    throw new CheckError(kind, detail.slice(0, 200) || response.statusText, response.status);
+  }
+}
 
 function buildBody(doc: AnnotatedDocument, options: CheckOptions): URLSearchParams {
   const body = new URLSearchParams();

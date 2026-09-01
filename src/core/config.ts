@@ -41,6 +41,8 @@ export const KEYS = {
   disabledCategories: 'languagetool.disabledCategories',
   username: 'languagetool.username',
   dictionary: 'languagetool.dictionary',
+  dictionaryEnabled: 'languagetool.dictionaryEnabled',
+  dictionaryPushToCloud: 'languagetool.dictionaryPushToCloud',
 } as const;
 
 export const DEFAULTS = {
@@ -63,8 +65,9 @@ export function readString(key: string, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
 }
 
-export function readBoolean(key: string): boolean {
-  return service?.get<boolean>(key, false) === true;
+export function readBoolean(key: string, fallback = false): boolean {
+  const value = service?.get<boolean>(key, fallback);
+  return typeof value === 'boolean' ? value : fallback;
 }
 
 /**
