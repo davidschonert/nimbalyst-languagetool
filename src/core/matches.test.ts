@@ -10,7 +10,15 @@ import { describe, expect, it } from 'vitest';
 
 import type { AnnotatedDocument } from './annotate';
 import type { RawMatch } from './client';
-import { anchorMatches, carryOver, diffText, flaggedText, kindFor, reanchor } from './matches';
+import {
+  anchorMatches,
+  carryOver,
+  diffText,
+  flaggedText,
+  kindFor,
+  reanchor,
+  replaceCovered,
+} from './matches';
 import type { AnchoredMatch } from './types';
 
 /**
@@ -406,5 +414,38 @@ describe('carryOver', () => {
     );
 
     expect(kept).toEqual([]);
+  });
+});
+
+describe('replaceCovered', () => {
+  /** A chunk holding the second half of one node, from offset 20 of it. */
+  const chunk: AnnotatedDocument = {
+    annotation: [{ text: 'second half here' }],
+    segments: [{ start: 0, length: 16, nodeKey: 'k1', nodeOffset: 20 }],
+  };
+
+  it('keeps anchors in the part of the node another chunk covered', () => {
+    // Splitting an oversized block cuts inside a text run, so one node key can
+    // appear in two chunks. Dropping by key alone took out what the first chunk
+    // had just contributed, and the first half of the paragraph blinked out.
+    const fromTheChunkBefore = anchorAt('k1', 3, 4, 'firsthalf');
+    const stale = anchorAt('k1', 22, 6, 'stale');
+    const fresh = anchorAt('k1', 25, 4, 'fresh');
+
+    expect(replaceCovered([fromTheChunkBefore, stale], [fresh], chunk)).toEqual([
+      fromTheChunkBefore,
+      fresh,
+    ]);
+  });
+
+  it('drops an anchor that only overlaps the checked range', () => {
+    // It straddles the seam, so this chunk's answer is the current word on it.
+    const straddling = anchorAt('k1', 18, 5, 'straddling');
+    expect(replaceCovered([straddling], [], chunk)).toEqual([]);
+  });
+
+  it('leaves every other node alone', () => {
+    const elsewhere = anchorAt('k2', 22, 6, 'elsewhere');
+    expect(replaceCovered([elsewhere], [], chunk)[0]).toBe(elsewhere);
   });
 });

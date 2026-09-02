@@ -19,7 +19,7 @@ import { chunkDocument } from '../core/chunk';
 import { check, CheckError, type Backend, type CheckErrorKind } from '../core/client';
 import { backend, checkOptions, chunkLimit, triggerMode } from '../core/config';
 import { addWord, dictionaryEnabled, isIgnored } from '../core/dictionary';
-import { anchorMatches, carryOver } from '../core/matches';
+import { anchorMatches, carryOver, replaceCovered } from '../core/matches';
 import { readApiKey } from '../core/secrets';
 import type { AnchoredMatch } from '../core/types';
 import { MatchPopover } from '../ui/MatchPopover';
@@ -151,19 +151,22 @@ export const LanguageToolExtension = defineExtension({
           const raw = await check(chunk, options, controller.signal);
           if (token !== checkToken || version !== docVersion) return;
 
-          reportedFailure = undefined;
           const fresh = anchorMatches(chunk, raw, isIgnored).filter(
             (anchor) => !ignoredAnchors.has(anchorId(anchor)),
           );
           collected.push(...fresh);
 
-          // Replace only what this chunk covers. The chunks still in flight
-          // keep the underlines they already had, so the document does not
-          // blank out and refill on every check.
-          const covered = new Set(chunk.segments.map((segment) => segment.nodeKey));
-          matches = matches.filter((anchor) => !covered.has(anchor.nodeKey)).concat(fresh);
+          // Replace only the ranges this chunk checked. The chunks still in
+          // flight keep the underlines they already had, so the document does
+          // not blank out and refill on every check.
+          matches = replaceCovered(matches, fresh, chunk);
           layer.setMatches(matches);
         }
+
+        // Every chunk answered, so whatever was wrong is over. Resetting inside
+        // the loop would let a chunk that fails every time warn on every check,
+        // since an earlier chunk succeeding would clear the flag first.
+        reportedFailure = undefined;
 
         // The fresh set is the authoritative one, so anything held over from a
         // node no chunk covers any more goes now.
@@ -173,11 +176,16 @@ export const LanguageToolExtension = defineExtension({
         if (error instanceof DOMException && error.name === 'AbortError') return;
         if (token !== checkToken) return;
 
-        // A local server that is not running is an expected state, not an
-        // error to shout about. Go quiet and try again on the next pause.
-        matches = [];
+        // Settle on what did answer. A chunk failing partway through no longer
+        // throws away the chunks before it, which on a long document is most of
+        // the work and, on cloud, the expected shape of hitting a rate limit.
+        matches = collected;
         layer.setMatches(matches);
-        closeCard();
+
+        // Nothing answered at all, which is what a local server that is not
+        // running looks like. That is an expected state rather than an error to
+        // shout about, so go quiet and try again on the next pause.
+        if (collected.length === 0) closeCard();
 
         const kind = error instanceof CheckError ? error.kind : 'http';
         if (kind !== reportedFailure) {

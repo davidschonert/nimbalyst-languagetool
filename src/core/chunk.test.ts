@@ -239,3 +239,27 @@ describe('chunks with nothing to check in them', () => {
     expect(chunks.map(flatten)).toEqual(['Before the code.', 'After the code.']);
   });
 });
+
+describe('the room left in a part', () => {
+  it('starts a new part rather than cutting a word when little room is left', () => {
+    // Regression. A markup piece can leave a handful of characters of budget,
+    // and the token fallback used to fire there, splitting a word that is
+    // nowhere near budget length while the next part had the whole budget free.
+    const PADDING = 'x'.repeat(95);
+    const PROSE = 'Antidisestablishmentarianism is a long word and so on forever more';
+
+    const { blocks } = walk(() => {
+      const node = $createParagraphNode();
+      const code = $createTextNode(PADDING);
+      code.toggleFormat('code');
+      node.append(code, $createTextNode(PROSE));
+      $getRoot().append(node);
+    });
+
+    const chunks = chunkDocument(blocks, 100);
+
+    // The padding is markup, so its part carries no segments and is never sent.
+    // What matters is that the prose arrives whole.
+    expect(chunks.map(flatten)).toEqual([PROSE]);
+  });
+});

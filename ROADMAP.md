@@ -20,6 +20,29 @@ the service. `CheckerExtension.ts` already knows which nodes those are, from `di
 The cache key has to cover the node keys as well as the text. Identical text in a recreated node is
 a different anchor, and reusing the old one would underline a node that no longer exists.
 
+## A check that survives a keystroke
+
+Raised by the review of #4, and left alone on purpose until the chunking has had some use.
+
+`runCheck` abandons the whole remaining sequence when `docVersion` moves, and one keystroke moves
+it. A 100,000 character document on local is five sequential requests, so during active editing the
+tail is rarely reached, and every attempt re-sends chunk 1 from the start. Before chunking, one
+uninterrupted window covered the whole document. Now the window has to cover the debounce plus every
+round trip.
+
+The guard itself is right and must not simply be relaxed. It is what stops a response built from an
+older tree being anchored to offsets that have already moved, and that failure is a wrong splice
+rather than a visible error.
+
+So the fix is to narrow it. Either resume the sequence where it stopped instead of restarting at
+chunk 1, or discard a response only when a node that its own chunk covers was dirtied since the run
+began. The second is the better answer and it wants the per-block cache above to exist first, since
+both are the same idea: stop treating the document as one unit of invalidation.
+
+Finding 5 of the same review compounds with this one. A node split across two chunks blinks out
+until the sequence finishes, and while the sequence keeps being abandoned it does not finish.
+
+
 ## Rate limiting
 
 The service allows 20 requests and 75,000 characters per minute on the free tier, and 80 and

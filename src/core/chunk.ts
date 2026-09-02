@@ -192,30 +192,46 @@ function* splitBlock(block: DocumentBlock, budget: number): Generator<DocumentBl
       }
 
       const cut = cutPoint(text, room);
-      builder.text(text.slice(0, cut), piece.nodeKey, nodeOffset);
+
+      // No boundary fits the room left. Start a part instead of cutting here,
+      // since a fresh one gets the whole budget and will usually hold one. A
+      // markup piece placed earlier can leave only a few characters, and
+      // cutting there would split a word that is nowhere near budget-length.
+      if (cut === 0 && builder.rawLength > 0) {
+        yield builder.build();
+        builder = new BlockBuilder();
+        continue;
+      }
+
+      // Only now is it a token longer than the entire budget.
+      const taken = cut === 0 ? room : cut;
+
+      builder.text(text.slice(0, taken), piece.nodeKey, nodeOffset);
       yield builder.build();
       builder = new BlockBuilder();
-      nodeOffset += cut;
-      text = text.slice(cut);
+      nodeOffset += taken;
+      text = text.slice(taken);
     }
   }
 
   if (builder.rawLength > 0) yield builder.build();
 }
 
-/** Where to cut a prose run that does not fit, as an index into it. */
+/**
+ * Where to cut a prose run that does not fit, as an index into it, or 0 when
+ * neither rung of the ladder lands inside `room`.
+ *
+ * Reporting 0 rather than falling back to `room` here is what lets the caller
+ * try a fresh part first. Cutting through a token is the last resort in the
+ * whole split, not the last resort in one call.
+ */
 function cutPoint(text: string, room: number): number {
   const sentence = lastBoundary(text, room, SENTENCE_END);
   if (sentence > 0) return sentence;
 
   // No sentence end fits. A word boundary at least leaves every word whole, so
   // the seam cannot invent a spelling match out of half of one.
-  const word = lastBoundary(text, room, WORD_END);
-  if (word > 0) return word;
-
-  // A single token longer than the entire budget. Cutting through it is wrong,
-  // and it is still better than never checking the text around it.
-  return room;
+  return lastBoundary(text, room, WORD_END);
 }
 
 /** The end of the last `pattern` match at or before `room`, or 0 if there is none. */

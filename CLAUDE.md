@@ -122,7 +122,11 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
   positives on both sides of it.
 - The one exception is a block larger than the entire budget, which has to be split somewhere or it
   can never be checked at all. That falls back to the last sentence end that fits, then to the last
-  word boundary, and only then through a token. Those parts are never packed next to a neighbour,
+  word boundary, then to starting a fresh part so the whole budget is available to look in, and only
+  then through a token. `cutPoint` reports "no boundary" rather than cutting, because the token cut
+  is the last resort of the whole split and not of one call: a markup piece placed earlier can leave
+  a few characters of room, and cutting there splits a word nowhere near budget length. Those parts
+  are never packed next to a neighbour,
   because the break between them is only a sentence end in the best case.
 - Size is measured twice. The service's cap counts the text it sees, which is prose plus the
   `interpretAs` substitutes; the raw length is what a match offset indexes. A chunk is under the

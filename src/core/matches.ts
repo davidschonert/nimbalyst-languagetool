@@ -112,6 +112,41 @@ export function anchorMatches(
   return anchored;
 }
 
+/**
+ * Swap a chunk's fresh matches in, dropping only the old ones that sat in text
+ * that chunk actually checked.
+ *
+ * Node keys alone are too coarse. Splitting an oversized block cuts inside a
+ * text run, so one node key can appear in two chunks, and dropping by key would
+ * take out the anchors the previous chunk had just contributed for the first
+ * half of that node. The chunk's own segments carry the in-node ranges it
+ * covered, so they are what the filter keys on.
+ */
+export function replaceCovered(
+  current: readonly AnchoredMatch[],
+  fresh: readonly AnchoredMatch[],
+  chunk: AnnotatedDocument,
+): AnchoredMatch[] {
+  const covered = new Map<NodeKey, Array<[number, number]>>();
+
+  for (const segment of chunk.segments) {
+    const ranges = covered.get(segment.nodeKey);
+    const range: [number, number] = [segment.nodeOffset, segment.nodeOffset + segment.length];
+    if (ranges) ranges.push(range);
+    else covered.set(segment.nodeKey, [range]);
+  }
+
+  const kept = current.filter((anchor) => {
+    const ranges = covered.get(anchor.nodeKey);
+    if (!ranges) return true;
+
+    const end = anchor.offset + anchor.length;
+    return !ranges.some(([from, to]) => anchor.offset < to && end > from);
+  });
+
+  return [...kept, ...fresh];
+}
+
 /** The change one edit made to a single node's text, in the old text's coordinates. */
 export interface TextEdit {
   /** First offset that differs. */
