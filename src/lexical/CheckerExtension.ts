@@ -14,9 +14,10 @@
 
 import { $getNodeByKey, $isTextNode, defineExtension, type LexicalEditor } from 'lexical';
 
-import { buildAnnotatedDocument, type AnnotatedDocument } from '../core/annotate';
+import { buildDocumentBlocks, type AnnotatedDocument } from '../core/annotate';
+import { chunkDocument } from '../core/chunk';
 import { check, CheckError, type Backend, type CheckErrorKind } from '../core/client';
-import { backend, checkOptions, triggerMode } from '../core/config';
+import { backend, checkOptions, chunkLimit, triggerMode } from '../core/config';
 import { addWord, dictionaryEnabled, isIgnored } from '../core/dictionary';
 import { anchorMatches } from '../core/matches';
 import { readApiKey } from '../core/secrets';
@@ -118,11 +119,13 @@ export const LanguageToolExtension = defineExtension({
       const controller = new AbortController();
       inFlight = controller;
 
-      let doc: AnnotatedDocument | undefined;
+      // One request per chunk. A document over the service's size cap would
+      // otherwise fail outright, and splitting it also means the top of a long
+      // document comes back while the rest is still in flight.
+      let chunks: AnnotatedDocument[] = [];
       editor.getEditorState().read(() => {
-        doc = buildAnnotatedDocument();
+        chunks = chunkDocument(buildDocumentBlocks(), chunkLimit());
       });
-      if (!doc) return;
 
       const options = checkOptions();
       // Rules dismissed with the card's disable control are declined at the
@@ -137,14 +140,34 @@ export const LanguageToolExtension = defineExtension({
         if (apiKey) options.apiKey = apiKey;
       }
 
-      try {
-        const raw = await check(doc, options, controller.signal);
-        if (token !== checkToken || version !== docVersion) return;
+      // Every match this pass produced. The running repaint below is the
+      // partial view, and this is what the document settles on.
+      const collected: AnchoredMatch[] = [];
 
-        reportedFailure = undefined;
-        matches = anchorMatches(doc, raw, isIgnored).filter(
-          (anchor) => !ignoredAnchors.has(anchorId(anchor)),
-        );
+      try {
+        // Sequential, so the underlines land top down and a long document does
+        // not fire every one of its requests at the service at once.
+        for (const chunk of chunks) {
+          const raw = await check(chunk, options, controller.signal);
+          if (token !== checkToken || version !== docVersion) return;
+
+          reportedFailure = undefined;
+          const fresh = anchorMatches(chunk, raw, isIgnored).filter(
+            (anchor) => !ignoredAnchors.has(anchorId(anchor)),
+          );
+          collected.push(...fresh);
+
+          // Replace only what this chunk covers. The chunks still in flight
+          // keep the underlines they already had, so the document does not
+          // blank out and refill on every check.
+          const covered = new Set(chunk.segments.map((segment) => segment.nodeKey));
+          matches = matches.filter((anchor) => !covered.has(anchor.nodeKey)).concat(fresh);
+          layer.setMatches(matches);
+        }
+
+        // The fresh set is the authoritative one, so anything held over from a
+        // node no chunk covers any more goes now.
+        matches = collected;
         layer.setMatches(matches);
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return;

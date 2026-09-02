@@ -107,6 +107,30 @@ export function baseUrlFor(selected: Backend): string {
 }
 
 /**
+ * The largest single request each backend is given, in characters.
+ *
+ * LanguageTool rejects a request over 20,000 characters on the free tier and
+ * 60,000 on Premium. The cloud backend here always carries Premium
+ * credentials, because `check()` refuses to send without both a username and a
+ * token, so it gets the higher figure.
+ *
+ * A self-hosted server has no cap by default, but it is commonly run with
+ * `--maxTextLength`, so local takes the conservative one. It is not only
+ * defensive: a limit is also what makes a long document paint from the top
+ * rather than all at once, and the local backend is the one that runs while
+ * you type. Neither is exposed as a setting, because the host renders no field
+ * UI for undeclared keys and an unreachable setting is worse than a constant.
+ */
+export const CHUNK_LIMIT: Record<Backend, number> = {
+  local: 20_000,
+  cloud: 60_000,
+};
+
+export function chunkLimit(): number {
+  return CHUNK_LIMIT[backend()];
+}
+
+/**
  * Assemble the request options. `apiKey` is left for the caller to supply,
  * since configuration is not somewhere a credential may be stored.
  */

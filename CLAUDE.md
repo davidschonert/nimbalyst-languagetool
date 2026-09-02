@@ -29,11 +29,12 @@ Every feature sits somewhere on this line. Know which stage you are in before ch
 
 ```
 Lexical node tree
-  └─ core/annotate.ts    buildAnnotatedDocument()  → AnnotationItem[] + TextSegment[]
-       └─ core/client.ts  check()                  → POST /v2/check  → RawMatch[]
-            └─ core/matches.ts  anchorMatches()    → AnchoredMatch[]  (nodeKey + in-node offset)
-                 └─ ui/UnderlineLayer.ts           → absolutely positioned squiggles
-                      └─ ui/MatchPopover.ts        → the correction card
+  └─ core/annotate.ts   buildDocumentBlocks()    → DocumentBlock[]
+       └─ core/chunk.ts  chunkDocument()         → AnnotatedDocument[]  (one per request)
+            └─ core/client.ts  check()           → POST /v2/check  → RawMatch[]
+                 └─ core/matches.ts  anchorMatches() → AnchoredMatch[]  (nodeKey + in-node offset)
+                      └─ ui/UnderlineLayer.ts    → absolutely positioned squiggles
+                           └─ ui/MatchPopover.ts → the correction card
 ```
 
 `lexical/CheckerExtension.ts` is the orchestrator: debounce, supersede, repaint, hit-test, apply.
@@ -45,7 +46,8 @@ the cloud token and nothing else.
 | Path                           | Holds                                                                        |
 | ------------------------------ | ---------------------------------------------------------------------------- |
 | `src/index.ts`                 | `activate` / `deactivate`, and the exports the manifest names.               |
-| `src/core/annotate.ts`         | Lexical tree → LanguageTool AnnotatedText, and the offset mapping back.      |
+| `src/core/annotate.ts`         | Lexical tree → blocks, blocks → AnnotatedText, and the offset mapping back.  |
+| `src/core/chunk.ts`            | Blocks → request-sized chunks. The split rule and the size budget.          |
 | `src/core/client.ts`           | The one HTTP call. Two backends, one request shape. `CheckError` taxonomy.   |
 | `src/core/matches.ts`          | `RawMatch` → `AnchoredMatch`. Issue types collapse to three underline kinds. |
 | `src/core/config.ts`           | Typed reads over the host's config bag. Defaults live here, not in manifest. |
@@ -89,6 +91,22 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
   position the user can edit. A match that overruns from prose into markup is clipped to the prose.
 - Nothing is serialized to markdown and re-parsed. The annotation is built from the node tree, so
   offsets never round-trip.
+- A chunk is a document in its own right. Its offsets start at zero and a match from it is resolved
+  against it, never against the whole file. `assembleDocument()` is the only thing that builds an
+  offset space, which is why chunking reuses it instead of doing the arithmetic a second time.
+
+**Chunk boundaries**
+
+- A chunk ends only between blocks, which is where the rendered document already has a paragraph
+  break. LanguageTool judges a sentence by the whole sentence, so a seam inside one produces false
+  positives on both sides of it.
+- The one exception is a block larger than the entire budget, which has to be split somewhere or it
+  can never be checked at all. That falls back to the last sentence end that fits, then to the last
+  word boundary, and only then through a token. Those parts are never packed next to a neighbour,
+  because the break between them is only a sentence end in the best case.
+- Size is measured twice. The service's cap counts the text it sees, which is prose plus the
+  `interpretAs` substitutes; the raw length is what a match offset indexes. A chunk is under the
+  limit on both.
 
 **Privacy**
 
@@ -130,9 +148,9 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
 
 - Conventional Commits, with branch prefixes `feature/`, `fix/`, `chore/` and `docs/`.
 - Protect `main`: a PR and green CI before merge. Keep PRs small and reviewable.
-- The tests cover what runs without an editor: the tree walk, the offset mapping, the match
-  anchoring, and the request the client builds. The overlay and the settings panel are verified by
-  running the app, so a change to either needs a manual pass before it ships.
+- The tests cover what runs without an editor: the tree walk, the offset mapping, the chunk split,
+  the match anchoring, and the request the client builds. The overlay and the settings panel are
+  verified by running the app, so a change to either needs a manual pass before it ships.
 
 ## Code review
 
