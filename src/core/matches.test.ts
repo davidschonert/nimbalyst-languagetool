@@ -237,6 +237,30 @@ describe('reanchor', () => {
     expect(reanchor(anchorAt('k1', 8, 4, 'straddling'), edit)).toBeNull();
   });
 });
+/**
+ * Run one edit and carry the matches across it the way the extension does:
+ * from the update listener's own dirty set and editor states, rather than from
+ * a hand-made guess at what Lexical marks dirty.
+ */
+function editAndCarry(
+  editor: ReturnType<typeof createHeadlessEditor>,
+  current: AnchoredMatch[],
+  mutate: () => void,
+): AnchoredMatch[] {
+  let carried = [...current];
+
+  const unregister = editor.registerUpdateListener(
+    ({ dirtyLeaves, prevEditorState, editorState }) => {
+      if (dirtyLeaves.size === 0) return;
+      carried = carryOver(carried, dirtyLeaves, prevEditorState, editorState);
+    },
+  );
+
+  editor.update(mutate, { discrete: true });
+  unregister();
+
+  return carried;
+}
 
 describe('carryOver', () => {
   const PARAGRAPH = 'Teh quick brown fox jumpd over.';
@@ -246,19 +270,15 @@ describe('carryOver', () => {
     // with it, and the paragraph stayed bare until the next check answered.
     const { editor, keys } = editorWith(PARAGRAPH);
     const key = keys[0]!;
-    const before = editor.getEditorState();
 
-    const current = [anchorAt(key, 0, 3, 'Teh'), anchorAt(key, 20, 5, 'jumpd')];
-
-    editor.update(
+    const kept = editAndCarry(
+      editor,
+      [anchorAt(key, 0, 3, 'Teh'), anchorAt(key, 20, 5, 'jumpd')],
       () => {
         const node = $getNodeByKey(key);
         if ($isTextNode(node)) node.spliceText(0, 3, 'The');
       },
-      { discrete: true },
     );
-
-    const kept = carryOver(current, new Set([key]), before, editor.getEditorState());
 
     expect(kept).toHaveLength(1);
     expect(kept[0]?.match.word).toBe('jumpd');
@@ -269,22 +289,11 @@ describe('carryOver', () => {
   it('slides the matches after text typed in front of them', () => {
     const { editor, keys } = editorWith(PARAGRAPH);
     const key = keys[0]!;
-    const before = editor.getEditorState();
 
-    editor.update(
-      () => {
-        const node = $getNodeByKey(key);
-        if ($isTextNode(node)) node.spliceText(0, 0, 'Very ');
-      },
-      { discrete: true },
-    );
-
-    const kept = carryOver(
-      [anchorAt(key, 20, 5, 'jumpd')],
-      new Set([key]),
-      before,
-      editor.getEditorState(),
-    );
+    const kept = editAndCarry(editor, [anchorAt(key, 20, 5, 'jumpd')], () => {
+      const node = $getNodeByKey(key);
+      if ($isTextNode(node)) node.spliceText(0, 0, 'Very ');
+    });
 
     expect(kept[0]?.offset).toBe(25);
   });
@@ -292,43 +301,78 @@ describe('carryOver', () => {
   it('leaves the matches of a node the edit did not touch', () => {
     const { editor, keys } = editorWith(PARAGRAPH, 'Anuther paragraph.');
     const [first, second] = keys as [string, string];
-    const before = editor.getEditorState();
-
     const elsewhere = anchorAt(second, 0, 7, 'Anuther');
 
-    editor.update(
-      () => {
-        const node = $getNodeByKey(first);
-        if ($isTextNode(node)) node.spliceText(0, 3, 'The');
-      },
-      { discrete: true },
-    );
-
-    const kept = carryOver(
-      [anchorAt(first, 0, 3, 'Teh'), elsewhere],
-      new Set([first]),
-      before,
-      editor.getEditorState(),
-    );
+    const kept = editAndCarry(editor, [anchorAt(first, 0, 3, 'Teh'), elsewhere], () => {
+      const node = $getNodeByKey(first);
+      if ($isTextNode(node)) node.spliceText(0, 3, 'The');
+    });
 
     expect(kept).toEqual([elsewhere]);
     // Untouched means the same object, which is what the popover compares on.
     expect(kept[0]).toBe(elsewhere);
   });
 
-  it('drops the matches of a node that is gone', () => {
+  it('follows the tail into the new node when Enter splits a paragraph', () => {
+    // Lexical keeps the head on the original node and puts the tail in one
+    // that did not exist a moment ago, so every match in the second half has
+    // no node to sit on unless it is handed over.
     const { editor, keys } = editorWith(PARAGRAPH);
     const key = keys[0]!;
-    const before = editor.getEditorState();
 
-    editor.update(() => $getRoot().clear(), { discrete: true });
-
-    const kept = carryOver(
-      [anchorAt(key, 0, 3, 'Teh')],
-      new Set([key]),
-      before,
-      editor.getEditorState(),
+    const kept = editAndCarry(
+      editor,
+      [anchorAt(key, 0, 3, 'Teh'), anchorAt(key, 20, 5, 'jumpd')],
+      () => {
+        const node = $getNodeByKey(key);
+        // Just before "jumpd", so the tail is "jumpd over.".
+        if ($isTextNode(node)) node.select(20, 20).insertParagraph();
+      },
     );
+
+    expect(kept).toHaveLength(2);
+    expect(kept[0]).toMatchObject({ nodeKey: key, offset: 0, length: 3 });
+
+    const tail = kept[1]!;
+    expect(tail.match.word).toBe('jumpd');
+    expect(tail.nodeKey).not.toBe(key);
+    // First thing in the new node.
+    expect(tail.offset).toBe(0);
+  });
+
+  it('follows the text into the surviving node when Backspace merges two', () => {
+    const { editor, keys } = editorWith('Teh quick ', 'jumpd over.');
+    const [first, second] = keys as [string, string];
+
+    const kept = editAndCarry(
+      editor,
+      [anchorAt(first, 0, 3, 'Teh'), anchorAt(second, 0, 5, 'jumpd')],
+      () => {
+        const node = $getNodeByKey(second);
+        if ($isTextNode(node)) node.select(0, 0).deleteCharacter(true);
+      },
+    );
+
+    expect(kept).toHaveLength(2);
+    expect(kept[0]).toMatchObject({ nodeKey: first, offset: 0 });
+
+    const merged = kept[1]!;
+    expect(merged.match.word).toBe('jumpd');
+    expect(merged.nodeKey).toBe(first);
+    // "Teh quick " is ten characters, and the second paragraph landed after it.
+    expect(merged.offset).toBe(10);
+  });
+
+  it('drops a match the split ran through', () => {
+    // Enter inside "jumpd" cuts the word in half, so neither half is the word
+    // the service judged and there is nowhere honest to put the underline.
+    const { editor, keys } = editorWith(PARAGRAPH);
+    const key = keys[0]!;
+
+    const kept = editAndCarry(editor, [anchorAt(key, 20, 5, 'jumpd')], () => {
+      const node = $getNodeByKey(key);
+      if ($isTextNode(node)) node.select(22, 22).insertParagraph();
+    });
 
     expect(kept).toEqual([]);
   });
@@ -343,5 +387,24 @@ describe('carryOver', () => {
     const kept = carryOver([anchor], new Set([key]), state, state);
 
     expect(kept[0]).toBe(anchor);
+  });
+
+  it('drops the matches of a node that is gone', () => {
+    const { editor, keys } = editorWith(PARAGRAPH);
+    const key = keys[0]!;
+    const before = editor.getEditorState();
+
+    editor.update(() => $getRoot().clear(), { discrete: true });
+
+    // Clearing the root reports no dirty leaves of its own, so this states the
+    // rule directly: a key with no text behind it any more keeps nothing.
+    const kept = carryOver(
+      [anchorAt(key, 0, 3, 'Teh')],
+      new Set([key]),
+      before,
+      editor.getEditorState(),
+    );
+
+    expect(kept).toEqual([]);
   });
 });

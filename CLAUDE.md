@@ -103,6 +103,14 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
   only place this happens, and `matches.test.ts` holds it.
 - A match the edit ran through is dropped rather than clipped or shifted. The text the service
   judged is not the text there any more, so there is nothing to keep.
+- Splitting a paragraph with Enter and merging two with Backspace move text between nodes rather
+  than within one, so `reanchor` alone cannot follow them and half a paragraph goes bare.
+  `movesFor()` recognises both from the shape of the change: a split leaves the head on the
+  original node and the tail verbatim in a node that did not exist before, and a merge destroys a
+  node and inserts its whole text into one that survived. Both shapes were confirmed against
+  Lexical, and the tests drive real `insertParagraph` and `deleteCharacter` calls rather than a
+  hand-made dirty set. Anything that does not match a shape exactly is left alone and its matches
+  are dropped, because guessing where text went is how an anchor lands on the wrong word.
 - `docVersion` still increments on every text change, so a response computed against the older tree
   is discarded rather than re-anchored. Carrying anchors is for what is already painted, not for
   results in flight.

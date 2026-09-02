@@ -10,6 +10,11 @@
  * underlines on screen across an edit instead of blanking it until the next
  * check answers: it moves each anchor to where its text now is, and drops only
  * the one the edit ran through.
+ *
+ * Two edits move text between nodes rather than within one, and both are
+ * ordinary enough that ignoring them would blank half a paragraph: splitting
+ * one with Enter, and merging two with Backspace. `movesFor` recognises those
+ * from the shape of the change and hands the anchors to their new node.
  */
 
 import { $getNodeByKey, $isTextNode } from 'lexical';
@@ -165,6 +170,108 @@ export function reanchor(anchor: AnchoredMatch, edit: TextEdit): AnchoredMatch |
   return null;
 }
 
+/**
+ * A run of text that one edit moved from one node into another.
+ *
+ * Splitting and merging paragraphs is not an edit to a node's text, it is text
+ * changing hands, so `reanchor` alone cannot follow it: the matches in the
+ * moved run belong to a node that no longer holds them.
+ */
+interface TextMove {
+  from: NodeKey;
+  /** Where the run started in the old text of `from`. */
+  fromOffset: number;
+  to: NodeKey;
+  /** Where the run starts in the new text of `to`. */
+  toOffset: number;
+  length: number;
+}
+
+/**
+ * The runs of text this update handed from one node to another.
+ *
+ * Only two shapes are recognised, and both were confirmed against Lexical
+ * rather than assumed:
+ *
+ *   - A split, which is Enter in the middle of a paragraph. The node keeps its
+ *     head, and a node that did not exist before holds the tail verbatim.
+ *   - A merge, which is Backspace at the start of one. A node is destroyed and
+ *     its whole text is inserted into one that survived.
+ *
+ * Anything else is left alone and its matches are dropped as before. Guessing
+ * where text went is how an anchor ends up on the wrong word, and a wrong
+ * anchor rewrites the wrong characters when its replacement is applied.
+ */
+function movesFor(
+  was: ReadonlyMap<NodeKey, string>,
+  now: ReadonlyMap<NodeKey, string>,
+  edits: ReadonlyMap<NodeKey, TextEdit | null>,
+): TextMove[] {
+  const moves: TextMove[] = [];
+
+  const appeared: NodeKey[] = [];
+  for (const key of now.keys()) if (!was.has(key)) appeared.push(key);
+
+  if (appeared.length > 0) {
+    for (const [key, edit] of edits) {
+      const oldText = was.get(key);
+      const newText = now.get(key);
+      if (!edit || oldText === undefined || newText === undefined) continue;
+
+      // A pure truncation: the change ran to the end of the old text and
+      // nothing replaced it. Anything else is not a split.
+      if (edit.end !== oldText.length || newText.length !== edit.start) continue;
+
+      const tail = oldText.slice(edit.start);
+      if (tail.length === 0) continue;
+
+      const found = appeared.filter((candidate) => now.get(candidate) === tail);
+      // Exactly one, or there is no telling which node the text went to.
+      if (found.length !== 1) continue;
+
+      moves.push({ from: key, fromOffset: edit.start, to: found[0]!, toOffset: 0, length: tail.length });
+    }
+  }
+
+  for (const key of was.keys()) {
+    if (now.has(key)) continue;
+
+    const text = was.get(key);
+    if (!text) continue;
+
+    const found: TextMove[] = [];
+    for (const [candidate, edit] of edits) {
+      // A pure insertion, of exactly this node's text and nothing else.
+      if (!edit || edit.start !== edit.end || edit.delta !== text.length) continue;
+      if (now.get(candidate)?.slice(edit.start, edit.start + text.length) !== text) continue;
+      found.push({ from: key, fromOffset: 0, to: candidate, toOffset: edit.start, length: text.length });
+    }
+
+    if (found.length === 1) moves.push(found[0]!);
+  }
+
+  return moves;
+}
+
+/** Follow an anchor into the node the text under it moved to. */
+function relocate(anchor: AnchoredMatch, moves: readonly TextMove[]): AnchoredMatch | null {
+  for (const move of moves) {
+    if (move.from !== anchor.nodeKey) continue;
+    // Wholly inside the run that moved. One straddling its edge was cut by the
+    // same edit, so there is no single place for it to land.
+    if (anchor.offset < move.fromOffset) continue;
+    if (anchor.offset + anchor.length > move.fromOffset + move.length) continue;
+
+    return {
+      ...anchor,
+      nodeKey: move.to,
+      offset: move.toOffset + (anchor.offset - move.fromOffset),
+    };
+  }
+
+  return null;
+}
+
 /** The text of each of `keys`, skipping any that is gone or is not a text node. */
 function textOf(state: EditorState, keys: Iterable<NodeKey>): Map<NodeKey, string> {
   const texts = new Map<NodeKey, string>();
@@ -196,24 +303,28 @@ export function carryOver(
   before: EditorState,
   after: EditorState,
 ): AnchoredMatch[] {
-  const edited = new Set<NodeKey>();
+  let affected = false;
   for (const anchor of current) {
-    if (dirtyLeaves.has(anchor.nodeKey)) edited.add(anchor.nodeKey);
+    if (dirtyLeaves.has(anchor.nodeKey)) affected = true;
   }
-  if (edited.size === 0) return [...current];
+  if (!affected) return [...current];
 
-  const was = textOf(before, edited);
-  const now = textOf(after, edited);
+  // The whole dirty set, not only the nodes carrying a match: the node a split
+  // hands its tail to has none of its own yet, and it is the destination.
+  const was = textOf(before, dirtyLeaves);
+  const now = textOf(after, dirtyLeaves);
 
   // A key absent from this map is a node with no text to re-anchor onto. A key
   // present with a null value is one that was dirtied without its text
   // changing, by a format or a sibling's reconciliation.
   const edits = new Map<NodeKey, TextEdit | null>();
-  for (const key of edited) {
+  for (const key of dirtyLeaves) {
     const from = was.get(key);
     const to = now.get(key);
     if (from !== undefined && to !== undefined) edits.set(key, diffText(from, to));
   }
+
+  const moves = movesFor(was, now, edits);
 
   const kept: AnchoredMatch[] = [];
   for (const anchor of current) {
@@ -221,6 +332,15 @@ export function carryOver(
       kept.push(anchor);
       continue;
     }
+
+    // Text that changed hands is followed first. Against its old node the same
+    // match reads as deleted, so `reanchor` would drop it.
+    const relocated = relocate(anchor, moves);
+    if (relocated) {
+      kept.push(relocated);
+      continue;
+    }
+
     if (!edits.has(anchor.nodeKey)) continue;
 
     const edit = edits.get(anchor.nodeKey);
