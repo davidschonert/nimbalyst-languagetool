@@ -7,6 +7,43 @@ repeat this list, because two lists drift apart.
 Each entry carries the constraint behind it rather than only a title. The numbers and the reasons
 are the part that is expensive to recover later.
 
+## Clear the underline when a correction is applied
+
+Found while using the extension. Click a replacement in the card and the word stays underlined until
+the next check answers. It should go the moment the text changes, since the thing it was reporting
+is no longer there.
+
+The cause is that nothing tells `carryOver` which match was applied. It infers what to drop from a
+common prefix and suffix comparison of the node's old and new text, and that comparison is
+deliberately minimal. When the replacement shares a prefix or a suffix with the flagged text, the
+changed range narrows to a sub-range the anchor does not overlap, so the anchor reads as untouched
+and is kept.
+
+Reproduced against a headless editor, applying each correction the way `onApply` does:
+
+| Flagged | Replacement | Result |
+| ------- | ----------- | ------ |
+| `a` in "a apple" | `an` | underline stays on the `a` of `an` |
+| ` and` in "hello and world" | `, and` | underline stays, now on ` and` |
+| `Teh` | `The` | clears correctly |
+| `recieve` | `receive` | clears correctly |
+| `the the` | `the` | clears correctly |
+
+The two behaviors are the same rule, which is why it looks intermittent rather than broken. A
+replacement that changes the first character clears; one that only inserts around the existing text
+does not.
+
+The fix is not to make the diff wider. Inference is right for typing, where nothing announces what
+changed, and widening it would drop neighbouring matches that are still perfectly good. It is simply
+unnecessary here: `onApply` already knows exactly which anchor it is applying, so it should drop that
+one itself and leave `carryOver` to handle everything else.
+
+There is an ordering trap in that. The drop has to happen before `editor.update()` rather than after,
+so that the update listener's `carryOver` runs on the already-filtered list. Filtering afterwards
+would be overwritten by whatever the listener assigned.
+
+Left unfixed for now on purpose, so it can go in with whatever else the chunking work turns up.
+
 ## Re-check only the blocks that changed
 
 Chunking splits the document, but a check still sends every chunk. Editing one paragraph re-sends
