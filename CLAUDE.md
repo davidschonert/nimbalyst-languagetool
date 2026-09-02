@@ -136,31 +136,69 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
 
 ## Code review
 
-Review is tied to units of work rather than to a calendar. Run the right tier for the stakes:
+Review is tied to units of work rather than to a calendar, and it runs in a session that did not
+write the code.
 
-- Every PR, required. `/code-review` at medium effort on the working diff, before opening or
-  merging. Fix the findings, then merge on green CI. This pairs with the small-PR rule, since small
-  diffs keep the review sharp.
-- Invariant changes. Bump to `/code-review high` for anything touching the offset model in
-  `annotate.ts`, the request contract in `client.ts`, the secret key in `secrets.ts`, or the
-  `manifest.json` contributions. Those are the four places where a mistake is silent.
-- Release boundaries. `/code-review max` on the branch or the PR. `max` is the top tier this project
-  uses, since the codebase is small enough that a wider sweep buys nothing.
+That second part is the method. A session reviewing its own diff still has every justification it
+invented sitting in context, including the comments it wrote asserting the thing holds, so it is
+primed to confirm rather than to falsify. It is not a second opinion. A fresh session sees what a
+reviewer sees, which is the diff, the code around it, and this file.
+
+The order:
+
+1. Before pushing, run the mechanical gate only: `npm run typecheck`, `npm test`, `npm run build`.
+   This is not a review. Pushing a red branch spends the reviewer's attention on what CI catches for
+   free.
+2. Open the PR. CI runs on Node 20.19 and 22, and the diff becomes a fixed thing with an address.
+3. Review from a new session, pointed at the PR number rather than at a branch or a working tree:
+   `/code-review high 4`. The PR carries the description, the commit messages and the CI result,
+   which is the same evidence a human reviewer would have.
+4. Findings go onto the PR with `--comment`, and into the report described below. Never into the
+   chat as a list. A finding in a transcript is gone when the session ends, and a finding on the PR
+   is still there in a month.
+5. The session that wrote the code fixes the findings. The reviewing session does not, because a
+   reviewer that fixes starts arguing itself out of its own findings.
+
+Tiers, by what a mistake would cost:
+
+- Every PR, required. `/code-review` at medium.
+- Invariant changes. `/code-review high` for anything touching the offset model in `annotate.ts`,
+  the anchor carry-over in `matches.ts`, the request contract in `client.ts`, the secret key in
+  `secrets.ts`, or the `manifest.json` contributions. Those are the places where a mistake is
+  silent.
+- Release boundaries. `/code-review ultra` on the PR, which is the same method run wider. It has to
+  be started by hand and it is billed, so it is not something a session can reach for on its own.
 - Anything touching what leaves the machine, meaning the cloud path, the token and the client
-  request, also gets `/security-review` on the pending branch changes.
+  request, also gets `/security-review` on the PR.
 - Review complements the manual pass on the overlay and the settings panel rather than replacing it.
   Review finds correctness issues, but only running the app proves the UI works.
 
+Two things follow from the reviewer having no context.
+
+The first is that this file is the only briefing it gets. A fresh session does not know that the
+offset model was confirmed against a live LanguageTool 6.6 server, or why the secret key has no
+colons in it, unless the repo says so. So an invariant belongs here or in a module header, never in
+a session, and the Hard invariants section above is written for that reader.
+
+The second is that the small-PR rule matters more here than it would with a human colleague, who
+would arrive with months of ambient knowledge of the codebase. Around 300 lines of source is where a
+review stays sharp. Past that, split the branch, or say in the description which commits to read and
+in what order.
+
 ### Reporting findings
 
-This is the deliverable rather than a nicety. Every review is one HTML Artifact plus
-`ReportFindings`, and never a list of findings in the chat. The chat gets three lines: the link, the
-count by severity, and how many need an owner decision.
+The deliverable is three things, and they are not redundant. Each is read at a different moment:
 
-The report exists to be decided on in about a minute. A report that takes ten minutes to parse gets
-skipped, and the review was still paid for.
+- **One HTML Artifact.** The report I actually read, and the only one of the three built to be
+  decided on in a single pass.
+- **`ReportFindings`.** So the findings render in the session's own UI rather than as prose.
+- **One inline PR comment per finding**, on the line it concerns, plus a summary comment. This is
+  the copy that outlives the session and the one the fixing session works from.
 
-Every finding carries all six fields:
+The chat gets three lines and no more: the Artifact link, the count by severity, and how many
+findings need a decision from me.
+
+Every finding carries all six of these, in the Artifact and in its PR comment alike:
 
 | Field            | Rule                                                                                                                                                                                                                 |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -171,13 +209,14 @@ Every finding carries all six fields:
 | **Fix**          | The actual change, with a snippet where a snippet beats prose. Enough that approving it needs no further thinking.                                                                                                   |
 | **Verdict**      | `Fix` (the default; assume yes, since token cost is not a constraint) · `Fix with care` (do it, but the named risk has to be handled) · `Don't fix` (the change would cost more than the defect, so say what it would break and what to do instead). |
 
-`Don't fix` and `Fix with care` are the point of the format. The owner's standing instruction is to
-fix everything, so the only thing that genuinely needs their attention is where that instruction is
-wrong. Surface those at the top, before the severity list, under a heading that says how many there
-are. Never bury a "this fix would do more harm than good" in a Low-severity row.
+`Don't fix` and `Fix with care` are the point of the format. My standing instruction is to fix
+everything, so the only thing that genuinely needs my attention is where that instruction is wrong.
+Surface those at the top, before the severity list, under a heading that says how many there are.
+Never bury a "this fix would do more harm than good" in a Low-severity row.
 
-Keep the layout identical from run to run, so the report does not have to be learned again each
-time:
+The report exists to be decided on in about a minute. A report that takes ten minutes to parse gets
+skipped, and the review was still paid for. So keep the layout identical from run to run, and do not
+make it something that has to be learned again each time:
 
 1. Verdict first: counts by severity.
 2. Then the decisions needed.
@@ -190,15 +229,17 @@ time:
   spelling red `#d6453d`, grammar amber `#d19a2c`, style blue `#3d7bd6`; text `#1a1a1a` / `#e6e6ea`,
   muted `#6b7280` / `#9a9aa6`, borders `#e2e4e9` / `#3a3b45`, grounds `#ffffff` / `#1c1c22`.
 
+The PR summary comment carries the same three sections in the same order, in plain markdown.
+
 Verify a finding before you report it. A failure scenario you reasoned out but never observed is a
 hypothesis. Most of this codebase is reachable from `vitest` and a headless editor, so reproduce it
 and put the observed output in the report. A finding that turns out to be wrong is more expensive
 than one you missed, because someone will act on it.
 
-After the fixes land, redeploy the same artifact, since the same file path keeps the same URL, with
-each finding marked `Fixed`, `Skipped (reason)` or `No change needed`. That keeps the record of what
-was decided with the findings rather than in chat scrollback. Commit messages still carry the
-summary.
+After the fixes land, redeploy the same Artifact, since the same file path keeps the same URL, with
+each finding marked `Fixed`, `Skipped (reason)` or `No change needed`. Resolve the matching PR
+comments at the same time. That keeps the record of what was decided with the findings rather than
+in chat scrollback. Commit messages still carry the summary.
 
 ## When unsure
 
