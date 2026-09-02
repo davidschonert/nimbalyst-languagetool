@@ -49,7 +49,7 @@ the cloud token and nothing else.
 | `src/core/annotate.ts`         | Lexical tree → blocks, blocks → AnnotatedText, and the offset mapping back.  |
 | `src/core/chunk.ts`            | Blocks → request-sized chunks. The split rule and the size budget.          |
 | `src/core/client.ts`           | The one HTTP call. Two backends, one request shape. `CheckError` taxonomy.   |
-| `src/core/matches.ts`          | `RawMatch` → `AnchoredMatch`. Issue types collapse to three underline kinds. |
+| `src/core/matches.ts`          | `RawMatch` → `AnchoredMatch`, and carrying an anchor across an edit.         |
 | `src/core/config.ts`           | Typed reads over the host's config bag. Defaults live here, not in manifest. |
 | `src/core/secrets.ts`          | The cloud token, over the host's encrypted store. Read the header.           |
 | `src/lexical/CheckerExtension.ts` | Registration, debounce, supersede, event wiring, teardown.                |
@@ -94,6 +94,18 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
 - A chunk is a document in its own right. Its offsets start at zero and a match from it is resolved
   against it, never against the whole file. `assembleDocument()` is the only thing that builds an
   offset space, which is why chunking reuses it instead of doing the arithmetic a second time.
+
+**Anchors across an edit**
+
+- An anchor kept through an edit is moved to where its text now is, never left where it was. Its
+  replacement splices at `offset` and `length`, so an anchor that is one character stale rewrites
+  the wrong characters and the document is silently corrupted. `carryOver()` in `matches.ts` is the
+  only place this happens, and `matches.test.ts` holds it.
+- A match the edit ran through is dropped rather than clipped or shifted. The text the service
+  judged is not the text there any more, so there is nothing to keep.
+- `docVersion` still increments on every text change, so a response computed against the older tree
+  is discarded rather than re-anchored. Carrying anchors is for what is already painted, not for
+  results in flight.
 
 **Chunk boundaries**
 

@@ -1,8 +1,17 @@
+import { createHeadlessEditor } from '@lexical/headless';
+import {
+  $createParagraphNode,
+  $createTextNode,
+  $getNodeByKey,
+  $getRoot,
+  $isTextNode,
+} from 'lexical';
 import { describe, expect, it } from 'vitest';
 
 import type { AnnotatedDocument } from './annotate';
 import type { RawMatch } from './client';
-import { anchorMatches, flaggedText, kindFor } from './matches';
+import { anchorMatches, carryOver, diffText, flaggedText, kindFor, reanchor } from './matches';
+import type { AnchoredMatch } from './types';
 
 /**
  * "Alpha beta." as markup, then " gamma delta." as prose. Offsets 0-10 are
@@ -130,5 +139,209 @@ describe('anchorMatches', () => {
   it('tolerates a match with no replacements', () => {
     const [anchored] = anchorMatches(doc, [match({ replacements: undefined })]);
     expect(anchored?.match.replacements).toEqual([]);
+  });
+});
+
+/** An anchor with just enough of a match on it to tell one from another. */
+function anchorAt(nodeKey: string, offset: number, length: number, word: string): AnchoredMatch {
+  return {
+    nodeKey,
+    offset,
+    length,
+    match: {
+      title: 'Spelling mistake',
+      detail: 'Possible spelling mistake found.',
+      replacements: [],
+      ruleId: 'RULE_ID',
+      category: 'Typo',
+      kind: 'spelling',
+      word,
+    },
+  };
+}
+
+/** One paragraph of one text node, and the key that node was given. */
+function editorWith(...paragraphs: string[]): {
+  editor: ReturnType<typeof createHeadlessEditor>;
+  keys: string[];
+} {
+  const editor = createHeadlessEditor({
+    onError: (error) => {
+      throw error;
+    },
+  });
+
+  const keys: string[] = [];
+  editor.update(
+    () => {
+      $getRoot().clear();
+      for (const text of paragraphs) {
+        const node = $createTextNode(text);
+        const block = $createParagraphNode();
+        block.append(node);
+        $getRoot().append(block);
+        keys.push(node.getKey());
+      }
+    },
+    { discrete: true },
+  );
+
+  return { editor, keys };
+}
+
+describe('diffText', () => {
+  it('reports nothing when the text did not change', () => {
+    expect(diffText('same', 'same')).toBeNull();
+  });
+
+  it('reports an insertion as an empty range at the point it went in', () => {
+    expect(diffText('cat', 'cart')).toEqual({ start: 2, end: 2, delta: 1 });
+  });
+
+  it('reports a deletion as the range that went', () => {
+    expect(diffText('hello world', 'hello')).toEqual({ start: 5, end: 11, delta: -6 });
+  });
+
+  it('reports a replacement as the range it covered', () => {
+    expect(diffText('teh', 'the')).toEqual({ start: 1, end: 3, delta: 0 });
+  });
+
+  it('reports a keystroke at the end as an insertion there', () => {
+    expect(diffText('word', 'words')).toEqual({ start: 4, end: 4, delta: 1 });
+  });
+});
+
+describe('reanchor', () => {
+  // Five characters replaced by eight, starting at offset 10.
+  const edit = { start: 10, end: 15, delta: 3 };
+
+  it('returns a match ending before the edit as itself, so identity holds', () => {
+    const untouched = anchorAt('k1', 4, 6, 'before');
+    expect(reanchor(untouched, edit)).toBe(untouched);
+  });
+
+  it('slides a match that begins where the edit ends', () => {
+    expect(reanchor(anchorAt('k1', 15, 4, 'after'), edit)?.offset).toBe(18);
+  });
+
+  it('slides a match back when the edit deleted text', () => {
+    const deletion = { start: 5, end: 10, delta: -5 };
+    expect(reanchor(anchorAt('k1', 20, 4, 'after'), deletion)?.offset).toBe(15);
+  });
+
+  it('drops a match the edit ran through', () => {
+    expect(reanchor(anchorAt('k1', 12, 4, 'inside'), edit)).toBeNull();
+  });
+
+  it('drops a match the edit began inside', () => {
+    expect(reanchor(anchorAt('k1', 8, 4, 'straddling'), edit)).toBeNull();
+  });
+});
+
+describe('carryOver', () => {
+  const PARAGRAPH = 'Teh quick brown fox jumpd over.';
+
+  it('keeps the rest of the paragraph when a correction is applied', () => {
+    // The whole point. Applying the fix for "Teh" used to take "jumpd" down
+    // with it, and the paragraph stayed bare until the next check answered.
+    const { editor, keys } = editorWith(PARAGRAPH);
+    const key = keys[0]!;
+    const before = editor.getEditorState();
+
+    const current = [anchorAt(key, 0, 3, 'Teh'), anchorAt(key, 20, 5, 'jumpd')];
+
+    editor.update(
+      () => {
+        const node = $getNodeByKey(key);
+        if ($isTextNode(node)) node.spliceText(0, 3, 'The');
+      },
+      { discrete: true },
+    );
+
+    const kept = carryOver(current, new Set([key]), before, editor.getEditorState());
+
+    expect(kept).toHaveLength(1);
+    expect(kept[0]?.match.word).toBe('jumpd');
+    // Same length in, same length out, so it did not have to move.
+    expect(kept[0]?.offset).toBe(20);
+  });
+
+  it('slides the matches after text typed in front of them', () => {
+    const { editor, keys } = editorWith(PARAGRAPH);
+    const key = keys[0]!;
+    const before = editor.getEditorState();
+
+    editor.update(
+      () => {
+        const node = $getNodeByKey(key);
+        if ($isTextNode(node)) node.spliceText(0, 0, 'Very ');
+      },
+      { discrete: true },
+    );
+
+    const kept = carryOver(
+      [anchorAt(key, 20, 5, 'jumpd')],
+      new Set([key]),
+      before,
+      editor.getEditorState(),
+    );
+
+    expect(kept[0]?.offset).toBe(25);
+  });
+
+  it('leaves the matches of a node the edit did not touch', () => {
+    const { editor, keys } = editorWith(PARAGRAPH, 'Anuther paragraph.');
+    const [first, second] = keys as [string, string];
+    const before = editor.getEditorState();
+
+    const elsewhere = anchorAt(second, 0, 7, 'Anuther');
+
+    editor.update(
+      () => {
+        const node = $getNodeByKey(first);
+        if ($isTextNode(node)) node.spliceText(0, 3, 'The');
+      },
+      { discrete: true },
+    );
+
+    const kept = carryOver(
+      [anchorAt(first, 0, 3, 'Teh'), elsewhere],
+      new Set([first]),
+      before,
+      editor.getEditorState(),
+    );
+
+    expect(kept).toEqual([elsewhere]);
+    // Untouched means the same object, which is what the popover compares on.
+    expect(kept[0]).toBe(elsewhere);
+  });
+
+  it('drops the matches of a node that is gone', () => {
+    const { editor, keys } = editorWith(PARAGRAPH);
+    const key = keys[0]!;
+    const before = editor.getEditorState();
+
+    editor.update(() => $getRoot().clear(), { discrete: true });
+
+    const kept = carryOver(
+      [anchorAt(key, 0, 3, 'Teh')],
+      new Set([key]),
+      before,
+      editor.getEditorState(),
+    );
+
+    expect(kept).toEqual([]);
+  });
+
+  it('keeps the matches of a node dirtied without its text changing', () => {
+    // A format change, or a sibling's reconciliation. Nothing moved.
+    const { editor, keys } = editorWith(PARAGRAPH);
+    const key = keys[0]!;
+    const state = editor.getEditorState();
+
+    const anchor = anchorAt(key, 0, 3, 'Teh');
+    const kept = carryOver([anchor], new Set([key]), state, state);
+
+    expect(kept[0]).toBe(anchor);
   });
 });

@@ -19,7 +19,7 @@ import { chunkDocument } from '../core/chunk';
 import { check, CheckError, type Backend, type CheckErrorKind } from '../core/client';
 import { backend, checkOptions, chunkLimit, triggerMode } from '../core/config';
 import { addWord, dictionaryEnabled, isIgnored } from '../core/dictionary';
-import { anchorMatches } from '../core/matches';
+import { anchorMatches, carryOver } from '../core/matches';
 import { readApiKey } from '../core/secrets';
 import type { AnchoredMatch } from '../core/types';
 import { MatchPopover } from '../ui/MatchPopover';
@@ -271,21 +271,27 @@ export const LanguageToolExtension = defineExtension({
       if (root) layer.attach(root);
     });
 
-    const unregisterUpdate = editor.registerUpdateListener(({ dirtyLeaves }) => {
-      // Edited nodes invalidate their own anchors. Everything else only moved,
-      // so it repaints immediately and the user never sees a stale underline.
-      if (dirtyLeaves.size > 0) {
-        docVersion++;
-        matches = matches.filter((anchor) => !dirtyLeaves.has(anchor.nodeKey));
-        if (popover.current && dirtyLeaves.has(popover.current.nodeKey)) closeCard();
-      }
-      layer.setMatches(matches);
+    const unregisterUpdate = editor.registerUpdateListener(
+      ({ dirtyLeaves, editorState, prevEditorState }) => {
+        // An edit moves the text out from under the anchors in the node it
+        // touched, so those are carried to where their text now is rather than
+        // dropped. Only the match the edit ran through goes, which leaves the
+        // rest of the paragraph underlined and clickable while the next check
+        // is still in flight. Everything outside the node only moved on screen,
+        // so it repaints immediately.
+        if (dirtyLeaves.size > 0) {
+          docVersion++;
+          matches = carryOver(matches, dirtyLeaves, prevEditorState, editorState);
+          if (popover.current && dirtyLeaves.has(popover.current.nodeKey)) closeCard();
+        }
+        layer.setMatches(matches);
 
-      // Moving the caret changes no text, so it is not worth a request. The
-      // first update is the initial load, which reports no dirty leaves.
-      if (dirtyLeaves.size === 0 && hasChecked) return;
-      scheduleCheck();
-    });
+        // Moving the caret changes no text, so it is not worth a request. The
+        // first update is the initial load, which reports no dirty leaves.
+        if (dirtyLeaves.size === 0 && hasChecked) return;
+        scheduleCheck();
+      },
+    );
 
     return () => {
       clearTimeout(checkTimer);
