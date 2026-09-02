@@ -10,19 +10,32 @@
  *
  *   1. A contributed Lexical extension receives `ExtensionServices`, which
  *      carries no storage, so the runtime could never read the token at load.
- *      Tracked at https://github.com/nimbalyst/nimbalyst/issues/1407
+ *      Still open: https://github.com/nimbalyst/nimbalyst/issues/1407
  *
- *   2. `ExtensionStorage` is unusable for secrets on Windows regardless.
+ *   2. `ExtensionStorage` was unusable for secrets on Windows regardless.
  *      `createExtensionStorage` scopes every secret as
- *      `nimbalyst:${extensionId}:${key}`, the main process sanitizes with
- *      `[^a-zA-Z0-9_:-]` which keeps colons, and the result becomes a
- *      filename. NTFS reads `name:stream` as an Alternate Data Stream, so the
- *      write fails with ENOENT and the read finds nothing. Verified: a colon
- *      key fails, the same key with underscores succeeds.
+ *      `nimbalyst:${extensionId}:${key}`, the old sanitizer kept colons, and
+ *      the result became a filename. NTFS reads `name:stream` as an Alternate
+ *      Data Stream, so the write failed with ENOENT and the read found
+ *      nothing. Fixed upstream, though not in a release yet:
+ *      https://github.com/nimbalyst/nimbalyst/issues/1408
  *
- * The key below is therefore chosen to survive that sanitizer unchanged rather
- * than to match the SDK's scheme, which cannot be produced on Windows anyway.
- * The store, the file location and the encryption are all still the host's.
+ * The key below is therefore chosen to survive the sanitizer unchanged rather
+ * than to match the SDK's scheme. The store, the file location and the
+ * encryption are all still the host's.
+ *
+ * When the fix for (2) ships, the stored token migrates on its own. The new
+ * filename carries a hash of the key, a read falls back to the pre-fix
+ * filename, and ours already IS that filename, so the first read after
+ * upgrading copies it forward and never removes the original.
+ *
+ * DO NOT move only the settings panel onto `storage.setSecret` when that
+ * lands. The panel does receive `storage`, so it will look like the supported
+ * fix, but the host would write under `nimbalyst:<extensionId>:apiKey`, which
+ * is a different key, so a different hash, so a different file from the one
+ * this module reads. The panel would report success and the checker would see
+ * no token. Reading and writing move together or not at all, and they cannot
+ * move until (1) is fixed.
  */
 
 /** Already sanitizer-safe: only letters, digits and underscores. */
@@ -37,6 +50,10 @@ let loaded = false;
 let warned = false;
 
 function bridge(): ElectronBridge | undefined {
+  // Guarded rather than assumed: reading `window` where it does not exist
+  // throws rather than yielding undefined, and this module is reachable from
+  // tests and from anything that runs outside a document.
+  if (typeof window === 'undefined') return undefined;
   const candidate = (window as unknown as { electronAPI?: ElectronBridge }).electronAPI;
   return typeof candidate?.invoke === 'function' ? candidate : undefined;
 }
@@ -94,6 +111,13 @@ export async function writeApiKey(value: string): Promise<boolean> {
     console.error('[languagetool] Could not save the access token:', error);
     return false;
   }
+}
+
+/** Drop the cached value, so the next read goes back to the store. */
+export function invalidateApiKey(): void {
+  cached = undefined;
+  loaded = false;
+  warned = false;
 }
 
 export async function clearApiKey(): Promise<boolean> {

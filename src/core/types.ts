@@ -18,6 +18,8 @@ export interface CheckMatch {
   ruleId: string;
   /** `rule.category.name`, shown in the card header. */
   category: string;
+  /** The flagged fragment itself. Empty when the service omitted the context. */
+  word: string;
   kind: MatchKind;
 }
 

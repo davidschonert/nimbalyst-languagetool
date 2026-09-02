@@ -40,6 +40,9 @@ export const KEYS = {
   disabledRules: 'languagetool.disabledRules',
   disabledCategories: 'languagetool.disabledCategories',
   username: 'languagetool.username',
+  dictionary: 'languagetool.dictionary',
+  dictionaryEnabled: 'languagetool.dictionaryEnabled',
+  dictionaryPushToCloud: 'languagetool.dictionaryPushToCloud',
 } as const;
 
 export const DEFAULTS = {
@@ -62,8 +65,18 @@ export function readString(key: string, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
 }
 
-export function readBoolean(key: string): boolean {
-  return service?.get<boolean>(key, false) === true;
+export function readBoolean(key: string, fallback = false): boolean {
+  const value = service?.get<boolean>(key, fallback);
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+/**
+ * A stored list. The host keeps configuration as JSON, so an array round-trips
+ * without the escaping a delimited string would need for words containing one.
+ */
+export function readArray(key: string): string[] {
+  const value = service?.get<unknown>(key, []);
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 }
 
 /** Comma-separated, because a single text field is the whole editor we need. */

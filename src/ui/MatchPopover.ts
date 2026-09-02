@@ -20,6 +20,15 @@ export interface PopoverActions {
   onIgnore: (anchor: AnchoredMatch) => void;
   /** Stop reporting this rule entirely. */
   onIgnoreRule: (anchor: AnchoredMatch) => void;
+  /** Add the flagged word to the personal dictionary. */
+  onAddToDictionary: (anchor: AnchoredMatch) => void;
+  /**
+   * Whether the dictionary is being applied. Offering Add while the list is
+   * switched off stores a word that suppresses nothing, so the card closes and
+   * the underline stays with no explanation. Asked per render rather than held,
+   * because settings are read lazily at the point of use.
+   */
+  canAddToDictionary: () => boolean;
   /** The card closed, by whichever route. */
   onClose: () => void;
 }
@@ -160,6 +169,22 @@ export class MatchPopover {
         });
         this.actionRow.append(button);
       }
+    }
+
+    // Only for a single flagged word. A dictionary entry says "this word is
+    // fine", which cannot sensibly be offered for a multi-word grammar match.
+    const word = match.word.trim();
+    if (word && !/\s/.test(word) && this.actions.canAddToDictionary()) {
+      const addToDictionary = document.createElement('button');
+      addToDictionary.type = 'button';
+      addToDictionary.className = 'lt-card__ignore';
+      addToDictionary.textContent = `Add ${word}`;
+      addToDictionary.title = `Add "${word}" to your personal dictionary`;
+      addToDictionary.addEventListener('click', () => {
+        this.actions.onAddToDictionary(anchor);
+        this.hide();
+      });
+      this.actionRow.append(addToDictionary);
     }
 
     const ignore = document.createElement('button');

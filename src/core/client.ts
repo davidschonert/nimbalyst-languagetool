@@ -40,6 +40,8 @@ export interface RawMatch {
   message: string;
   shortMessage?: string;
   replacements?: Array<{ value: string }>;
+  /** Carries the flagged fragment, so reading the editor state is not needed. */
+  context?: { text: string; offset: number; length: number };
   rule: {
     id: string;
     issueType?: string;
@@ -70,6 +72,69 @@ export class CheckError extends Error {
 }
 
 const CHECK_PATH = '/v2/check';
+const ADD_WORD_PATH = '/v2/words/add';
+
+/**
+ * The account copy is a bonus rather than the thing that makes a word work, so
+ * it gets a bound rather than the platform's TCP timeout. Nothing waits on it.
+ */
+const ADD_WORD_TIMEOUT_MS = 10_000;
+
+/**
+ * Add a word to the LanguageTool account's own dictionary.
+ *
+ * This writes to the user's account, so it also changes what the browser
+ * extension and any other LanguageTool client report. It is only ever called
+ * when the user has turned that on explicitly.
+ *
+ * The endpoint takes the same credentials as a check and rejects a username
+ * without an apiKey the same way, with a plain-text body.
+ *
+ * A 200 is not the answer. The service reports a refused word — one already in
+ * the account, or one it will not accept — as `{"added": false}` with a 200, so
+ * the body is what decides, and anything but `true` throws.
+ */
+export async function addWordToAccount(
+  word: string,
+  options: { baseUrl: string; username: string; apiKey: string },
+): Promise<void> {
+  const body = new URLSearchParams();
+  body.set('word', word);
+  body.set('username', options.username);
+  body.set('apiKey', options.apiKey);
+
+  const url = options.baseUrl.replace(/\/+$/, '') + ADD_WORD_PATH;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+      signal: AbortSignal.timeout(ADD_WORD_TIMEOUT_MS),
+    });
+  } catch {
+    throw new CheckError('offline', `Could not reach LanguageTool at ${url}.`);
+  }
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    const kind: CheckErrorKind =
+      response.status === 401 || response.status === 403 ? 'auth' : 'http';
+    throw new CheckError(kind, detail.slice(0, 200) || response.statusText, response.status);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new CheckError('malformed', 'LanguageTool returned a response that was not JSON.');
+  }
+
+  if ((payload as { added?: unknown }).added !== true) {
+    throw new CheckError('http', 'LanguageTool did not add the word.', response.status);
+  }
+}
 
 function buildBody(doc: AnnotatedDocument, options: CheckOptions): URLSearchParams {
   const body = new URLSearchParams();

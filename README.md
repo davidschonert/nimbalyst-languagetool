@@ -18,7 +18,9 @@ Two backends, switchable from the settings panel.
 
 **Cloud.** `api.languagetoolplus.com`, which needs a Premium username and access token and gives you the premium-only rules. It is rate limited per day, so it is manual only and meant for a final pass.
 
-Document text is sent to the cloud backend only when you choose it. The access token is kept in Nimbalyst's encrypted secret store, so it is never written into this repository or into a settings file.
+Document text is sent to the cloud backend only when you choose it. There is one exception, and it is one you have to turn on: if you switch on adding new words to your LanguageTool account, then each word you add goes to LanguageTool, whichever backend you are checking with. That is what makes the word work in the browser extension too. It is off by default, it happens only at the moment you add a word, and it sends that word and nothing else.
+
+The access token is kept in Nimbalyst's encrypted secret store, so it is never written into this repository or into a settings file.
 
 ## Status
 
@@ -26,9 +28,12 @@ Document text is sent to the cloud backend only when you choose it. The access t
 - [x] Markdown-aware checking, built from the Lexical node tree so syntax is not flagged
 - [x] Both backends, with local as the default
 - [x] Settings panel: backend, credentials, language, rule and category disabling, `picky`
+- [x] Personal dictionary, so your own vocabulary stops being reported as misspellings, with an
+      option to add new words to your LanguageTool account as well
 
 Everything still missing is in [ROADMAP.md](ROADMAP.md), with the constraint behind each item.
-The next one is a personal dictionary, since product names are currently reported as misspellings.
+The next one is chunking, which is the only fix for a document larger than the service will accept
+in one request.
 
 ## Development
 

@@ -288,3 +288,43 @@
 }
 .lt-toggle input { margin-top: 0.2rem; accent-color: var(--nim-primary, #3d7bd6); }
 .lt-toggle > span { display: flex; flex-direction: column; gap: 0.125rem; }
+
+/* ---------- dictionary list ---------- */
+
+.lt-words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: 26rem;
+}
+
+.lt-word {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1875rem 0.25rem 0.1875rem 0.5rem;
+  border: 1px solid var(--nim-border, #e2e4e9);
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  background: var(--nim-bg-tertiary, #f1f2f4);
+}
+
+.lt-word__remove {
+  display: grid;
+  place-items: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--nim-text-muted, #6b7280);
+  cursor: pointer;
+  font-size: 0.9375rem;
+  line-height: 1;
+}
+.lt-word__remove:hover { background: var(--nim-bg-secondary, #fff); color: var(--nim-text, #1a1a1a); }
+.lt-word__remove:focus-visible { outline: 2px solid var(--nim-primary, #3d7bd6); outline-offset: 1px; }

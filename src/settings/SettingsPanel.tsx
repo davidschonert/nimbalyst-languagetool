@@ -18,12 +18,13 @@
  * secrets.ts.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SettingsPanelProps } from '@nimbalyst/extension-sdk';
 
 import type { Backend } from '../core/client';
 import { CheckError, testConnection } from '../core/client';
 import { DEFAULTS, KEYS, readBoolean, readString, writeSetting } from '../core/config';
+import { addWord, dictionaryWords, removeWord } from '../core/dictionary';
 import { clearApiKey, hasApiKey, readApiKey, writeApiKey } from '../core/secrets';
 
 type TestState =
@@ -90,6 +91,14 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
   const [disabledCategories, setDisabledCategories] = useState('');
   const [triggerMode, setTriggerMode] = useState(DEFAULTS.triggerMode);
 
+  const [words, setWords] = useState<string[]>([]);
+  const [wordDraft, setWordDraft] = useState('');
+  const [dictionaryOn, setDictionaryOn] = useState(true);
+  const [pushWords, setPushWords] = useState(false);
+  const [wordNote, setWordNote] = useState('');
+  /** Which add the note belongs to, so a slow account push cannot overwrite a newer one. */
+  const wordAttempt = useRef(0);
+
   const [tokenDraft, setTokenDraft] = useState('');
   const [hasToken, setHasToken] = useState(false);
   const [test, setTest] = useState<TestState>({ status: 'idle' });
@@ -105,6 +114,10 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
     setDisabledRules(readString(KEYS.disabledRules));
     setDisabledCategories(readString(KEYS.disabledCategories));
     setTriggerMode(readString(KEYS.triggerMode, DEFAULTS.triggerMode) === 'hover' ? 'hover' : 'click');
+
+    setWords(dictionaryWords());
+    setDictionaryOn(readBoolean(KEYS.dictionaryEnabled, true));
+    setPushWords(readBoolean(KEYS.dictionaryPushToCloud));
 
     // Only whether one exists. The value is never shown.
     void hasApiKey().then(setHasToken);
@@ -137,6 +150,50 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
     setHasToken(false);
     setTokenDraft('');
     setTest({ status: 'idle' });
+  }, []);
+
+  const saveWord = useCallback(async () => {
+    const draft = wordDraft.trim();
+    // The button is disabled for a blank draft, but Enter reaches here too, and
+    // "nothing to add" must not be reported as "already in the list".
+    if (!draft) return;
+
+    const result = await addWord(draft);
+    if (!result.added) {
+      setWordNote('That word is already in the list.');
+      return;
+    }
+
+    // The local add is done, so the field clears now rather than waiting on a
+    // network round trip that the word does not depend on.
+    setWordDraft('');
+    setWords(dictionaryWords());
+    setWordNote(pushWords ? `Added here. Sending ${draft} to your account…` : '');
+
+    // Only the account copy is left to report, and it can fail without the word
+    // ceasing to work. A second add landing first wins the note, which is right:
+    // it is the newer one.
+    const attempt = ++wordAttempt.current;
+    const cloud = await result.cloud;
+    if (attempt !== wordAttempt.current) return;
+    setWordNote(
+      cloud === 'added'
+        ? 'Added here and to your LanguageTool account.'
+        : cloud === 'failed'
+          ? 'Added here. Could not reach your LanguageTool account, so it is not there.'
+          : cloud === 'unavailable'
+            ? 'Added here. Your account needs a username and token before words can go there too.'
+            : '',
+    );
+  }, [wordDraft, pushWords]);
+
+  const dropWord = useCallback(async (word: string) => {
+    // Claims the note too, so an account push still in flight cannot put its
+    // result back after the user has moved on to removing something.
+    wordAttempt.current += 1;
+    await removeWord(word);
+    setWords(dictionaryWords());
+    setWordNote('');
   }, []);
 
   const runTest = useCallback(async () => {
@@ -347,6 +404,95 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
             save(KEYS.disabledCategories, next);
           }}
         />
+      </section>
+
+      <section className="lt-section">
+        <h4 className="lt-section__title">Dictionary</h4>
+        <p className="lt-section__note">
+          Words here are never reported, on either backend. Add them from the correction card, or
+          type one below.
+        </p>
+
+        <label className="lt-toggle">
+          <input
+            type="checkbox"
+            checked={dictionaryOn}
+            onChange={(event) => {
+              setDictionaryOn(event.target.checked);
+              save(KEYS.dictionaryEnabled, event.target.checked);
+            }}
+          />
+          <span>
+            <span className="lt-field__label">Use this dictionary</span>
+            <span className="lt-field__hint">
+              Turning it off keeps every word, so you can rely on your LanguageTool account
+              dictionary alone without losing what you have collected here.
+            </span>
+          </span>
+        </label>
+
+        <label className="lt-toggle">
+          <input
+            type="checkbox"
+            checked={pushWords}
+            onChange={(event) => {
+              setPushWords(event.target.checked);
+              save(KEYS.dictionaryPushToCloud, event.target.checked);
+            }}
+          />
+          <span>
+            <span className="lt-field__label">Also add new words to my LanguageTool account</span>
+            <span className="lt-field__hint">
+              Needs the cloud username and token. This changes your account, so it affects the
+              browser extension too. Words are only ever added, never removed.
+            </span>
+          </span>
+        </label>
+
+        <div className="lt-token">
+          <input
+            className="lt-field__input"
+            type="text"
+            value={wordDraft}
+            placeholder="Add a word"
+            spellCheck={false}
+            onChange={(event) => setWordDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && wordDraft.trim()) void saveWord();
+            }}
+          />
+          <button
+            type="button"
+            className="lt-button"
+            disabled={!wordDraft.trim()}
+            onClick={() => void saveWord()}
+          >
+            Add
+          </button>
+        </div>
+
+        {wordNote ? <p className="lt-field__hint">{wordNote}</p> : null}
+
+        {words.length === 0 ? (
+          <p className="lt-field__hint">No words yet.</p>
+        ) : (
+          <ul className="lt-words">
+            {words.map((word) => (
+              <li key={word} className="lt-word">
+                <span>{word}</span>
+                <button
+                  type="button"
+                  className="lt-word__remove"
+                  aria-label={`Remove ${word}`}
+                  title={`Remove ${word}`}
+                  onClick={() => void dropWord(word)}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section className="lt-section">
