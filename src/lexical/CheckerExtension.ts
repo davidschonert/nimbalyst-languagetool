@@ -14,11 +14,12 @@
 
 import { $getNodeByKey, $isTextNode, defineExtension, type LexicalEditor } from 'lexical';
 
-import { buildAnnotatedDocument, type AnnotatedDocument } from '../core/annotate';
+import { buildDocumentBlocks, type AnnotatedDocument } from '../core/annotate';
+import { chunkDocument } from '../core/chunk';
 import { check, CheckError, type Backend, type CheckErrorKind } from '../core/client';
-import { backend, checkOptions, triggerMode } from '../core/config';
+import { backend, checkOptions, chunkLimit, triggerMode } from '../core/config';
 import { addWord, dictionaryEnabled, isIgnored } from '../core/dictionary';
-import { anchorMatches } from '../core/matches';
+import { anchorMatches, carryOver, replaceCovered } from '../core/matches';
 import { readApiKey } from '../core/secrets';
 import type { AnchoredMatch } from '../core/types';
 import { MatchPopover } from '../ui/MatchPopover';
@@ -118,11 +119,13 @@ export const LanguageToolExtension = defineExtension({
       const controller = new AbortController();
       inFlight = controller;
 
-      let doc: AnnotatedDocument | undefined;
+      // One request per chunk. A document over the service's size cap would
+      // otherwise fail outright, and splitting it also means the top of a long
+      // document comes back while the rest is still in flight.
+      let chunks: AnnotatedDocument[] = [];
       editor.getEditorState().read(() => {
-        doc = buildAnnotatedDocument();
+        chunks = chunkDocument(buildDocumentBlocks(), chunkLimit());
       });
-      if (!doc) return;
 
       const options = checkOptions();
       // Rules dismissed with the card's disable control are declined at the
@@ -137,24 +140,52 @@ export const LanguageToolExtension = defineExtension({
         if (apiKey) options.apiKey = apiKey;
       }
 
-      try {
-        const raw = await check(doc, options, controller.signal);
-        if (token !== checkToken || version !== docVersion) return;
+      // Every match this pass produced. The running repaint below is the
+      // partial view, and this is what the document settles on.
+      const collected: AnchoredMatch[] = [];
 
+      try {
+        // Sequential, so the underlines land top down and a long document does
+        // not fire every one of its requests at the service at once.
+        for (const chunk of chunks) {
+          const raw = await check(chunk, options, controller.signal);
+          if (token !== checkToken || version !== docVersion) return;
+
+          const fresh = anchorMatches(chunk, raw, isIgnored).filter(
+            (anchor) => !ignoredAnchors.has(anchorId(anchor)),
+          );
+          collected.push(...fresh);
+
+          // Replace only the ranges this chunk checked. The chunks still in
+          // flight keep the underlines they already had, so the document does
+          // not blank out and refill on every check.
+          matches = replaceCovered(matches, fresh, chunk);
+          layer.setMatches(matches);
+        }
+
+        // Every chunk answered, so whatever was wrong is over. Resetting inside
+        // the loop would let a chunk that fails every time warn on every check,
+        // since an earlier chunk succeeding would clear the flag first.
         reportedFailure = undefined;
-        matches = anchorMatches(doc, raw, isIgnored).filter(
-          (anchor) => !ignoredAnchors.has(anchorId(anchor)),
-        );
+
+        // The fresh set is the authoritative one, so anything held over from a
+        // node no chunk covers any more goes now.
+        matches = collected;
         layer.setMatches(matches);
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return;
         if (token !== checkToken) return;
 
-        // A local server that is not running is an expected state, not an
-        // error to shout about. Go quiet and try again on the next pause.
-        matches = [];
+        // Settle on what did answer. A chunk failing partway through no longer
+        // throws away the chunks before it, which on a long document is most of
+        // the work and, on cloud, the expected shape of hitting a rate limit.
+        matches = collected;
         layer.setMatches(matches);
-        closeCard();
+
+        // Nothing answered at all, which is what a local server that is not
+        // running looks like. That is an expected state rather than an error to
+        // shout about, so go quiet and try again on the next pause.
+        if (collected.length === 0) closeCard();
 
         const kind = error instanceof CheckError ? error.kind : 'http';
         if (kind !== reportedFailure) {
@@ -248,21 +279,27 @@ export const LanguageToolExtension = defineExtension({
       if (root) layer.attach(root);
     });
 
-    const unregisterUpdate = editor.registerUpdateListener(({ dirtyLeaves }) => {
-      // Edited nodes invalidate their own anchors. Everything else only moved,
-      // so it repaints immediately and the user never sees a stale underline.
-      if (dirtyLeaves.size > 0) {
-        docVersion++;
-        matches = matches.filter((anchor) => !dirtyLeaves.has(anchor.nodeKey));
-        if (popover.current && dirtyLeaves.has(popover.current.nodeKey)) closeCard();
-      }
-      layer.setMatches(matches);
+    const unregisterUpdate = editor.registerUpdateListener(
+      ({ dirtyLeaves, editorState, prevEditorState }) => {
+        // An edit moves the text out from under the anchors in the node it
+        // touched, so those are carried to where their text now is rather than
+        // dropped. Only the match the edit ran through goes, which leaves the
+        // rest of the paragraph underlined and clickable while the next check
+        // is still in flight. Everything outside the node only moved on screen,
+        // so it repaints immediately.
+        if (dirtyLeaves.size > 0) {
+          docVersion++;
+          matches = carryOver(matches, dirtyLeaves, prevEditorState, editorState);
+          if (popover.current && dirtyLeaves.has(popover.current.nodeKey)) closeCard();
+        }
+        layer.setMatches(matches);
 
-      // Moving the caret changes no text, so it is not worth a request. The
-      // first update is the initial load, which reports no dirty leaves.
-      if (dirtyLeaves.size === 0 && hasChecked) return;
-      scheduleCheck();
-    });
+        // Moving the caret changes no text, so it is not worth a request. The
+        // first update is the initial load, which reports no dirty leaves.
+        if (dirtyLeaves.size === 0 && hasChecked) return;
+        scheduleCheck();
+      },
+    );
 
     return () => {
       clearTimeout(checkTimer);

@@ -7,29 +7,92 @@ repeat this list, because two lists drift apart.
 Each entry carries the constraint behind it rather than only a title. The numbers and the reasons
 are the part that is expensive to recover later.
 
-## Chunking
+## Clear the underline when a correction is applied
 
-The service rejects a single request over 20,000 characters on the free tier and 60,000 on Premium.
-A document over the cap fails outright, the underlines disappear, and the only explanation is an
-HTTP error. That alone makes chunking necessary rather than an optimization.
+Found while using the extension. Click a replacement in the card and the word stays underlined until
+the next check answers. It should go the moment the text changes, since the thing it was reporting
+is no longer there.
 
-It also earns its place twice more. Results for the top of a long document arrive sooner, and an
-edit can re-check only the block it touched instead of the whole file, which composes with the
-`dirtyLeaves` invalidation already in `CheckerExtension.ts`.
+The cause is that nothing tells `carryOver` which match was applied. It infers what to drop from a
+common prefix and suffix comparison of the node's old and new text, and that comparison is
+deliberately minimal. When the replacement shares a prefix or a suffix with the flagged text, the
+changed range narrows to a sub-range the anchor does not overlap, so the anchor reads as untouched
+and is kept.
 
-Chunk on block boundaries and never mid-sentence. LanguageTool needs sentence context, so a split
-inside one produces false positives at every seam.
+Reproduced against a headless editor, applying each correction the way `onApply` does:
+
+| Flagged | Replacement | Result |
+| ------- | ----------- | ------ |
+| `a` in "a apple" | `an` | underline stays on the `a` of `an` |
+| ` and` in "hello and world" | `, and` | underline stays, now on ` and` |
+| `Teh` | `The` | clears correctly |
+| `recieve` | `receive` | clears correctly |
+| `the the` | `the` | clears correctly |
+
+The two behaviors are the same rule, which is why it looks intermittent rather than broken. A
+replacement that changes the first character clears; one that only inserts around the existing text
+does not.
+
+The fix is not to make the diff wider. Inference is right for typing, where nothing announces what
+changed, and widening it would drop neighbouring matches that are still perfectly good. It is simply
+unnecessary here: `onApply` already knows exactly which anchor it is applying, so it should drop that
+one itself and leave `carryOver` to handle everything else.
+
+There is an ordering trap in that. The drop has to happen before `editor.update()` rather than after,
+so that the update listener's `carryOver` runs on the already-filtered list. Filtering afterwards
+would be overwritten by whatever the listener assigned.
+
+Left unfixed for now on purpose, so it can go in with whatever else the chunking work turns up.
+
+## Re-check only the blocks that changed
+
+Chunking splits the document, but a check still sends every chunk. Editing one paragraph re-sends
+the whole file, which is the third thing chunking was meant to buy and the one still outstanding.
+
+The seam it needs already exists. Matches come back anchored to a node key and an in-node offset,
+which is a coordinate space that does not depend on how the document was chunked, so a cache keyed
+on a block's content would let an unchanged block keep its matches while only the dirty ones go to
+the service. `CheckerExtension.ts` already knows which nodes those are, from `dirtyLeaves`.
+
+The cache key has to cover the node keys as well as the text. Identical text in a recreated node is
+a different anchor, and reusing the old one would underline a node that no longer exists.
+
+## A check that survives a keystroke
+
+Raised by the review of #4, and left alone on purpose until the chunking has had some use.
+
+`runCheck` abandons the whole remaining sequence when `docVersion` moves, and one keystroke moves
+it. A 100,000 character document on local is five sequential requests, so during active editing the
+tail is rarely reached, and every attempt re-sends chunk 1 from the start. Before chunking, one
+uninterrupted window covered the whole document. Now the window has to cover the debounce plus every
+round trip.
+
+The guard itself is right and must not simply be relaxed. It is what stops a response built from an
+older tree being anchored to offsets that have already moved, and that failure is a wrong splice
+rather than a visible error.
+
+So the fix is to narrow it. Either resume the sequence where it stopped instead of restarting at
+chunk 1, or discard a response only when a node that its own chunk covers was dirtied since the run
+began. The second is the better answer and it wants the per-block cache above to exist first, since
+both are the same idea: stop treating the document as one unit of invalidation.
+
+Finding 5 of the same review compounds with this one. A node split across two chunks blinks out
+until the sequence finishes, and while the sequence keeps being abandoned it does not finish.
+
 
 ## Rate limiting
 
 The service allows 20 requests and 75,000 characters per minute on the free tier, and 80 and
-300,000 on Premium. Because every check sends the whole document, characters per minute binds before
-requests per minute: a 20,000 character document allows a check every 16 seconds on free and every 4
-seconds on Premium.
+300,000 on Premium. Characters per minute used to bind first, because every check sent the whole
+document: a 20,000 character document allowed a check every 16 seconds on free and every 4 seconds
+on Premium.
 
-The cloud debounce is currently one fixed value, which is both too slow for Premium and too fast for
-free. A rate limit that accounts for document size would replace it. Chunking changes this
-calculation, so it is probably worth doing chunking first.
+Chunking changes that. A check of a long document is now several requests in a row rather than one,
+so requests per minute is worth counting again, and the figure to rate limit against is the chunk
+rather than the file.
+
+The cloud debounce is still one fixed value, which is both too slow for Premium and too fast for
+free. A rate limit that accounts for how much is actually being sent would replace it.
 
 ## A visible indicator of the active backend
 

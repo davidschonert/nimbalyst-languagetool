@@ -30,10 +30,10 @@ The access token is kept in Nimbalyst's encrypted secret store, so it is never w
 - [x] Settings panel: backend, credentials, language, rule and category disabling, `picky`
 - [x] Personal dictionary, so your own vocabulary stops being reported as misspellings, with an
       option to add new words to your LanguageTool account as well
+- [x] Chunking, so a document larger than the service will accept in one request still gets
+      checked, and a long one underlines from the top down instead of all at once
 
 Everything still missing is in [ROADMAP.md](ROADMAP.md), with the constraint behind each item.
-The next one is chunking, which is the only fix for a document larger than the service will accept
-in one request.
 
 ## Development
 
@@ -51,8 +51,8 @@ extension. An invalid manifest makes the host skip the extension entirely, which
 extension being absent rather than broken, so it is worth failing the build instead.
 
 The tests cover the parts that can run without the editor: the tree walk, the offset mapping, the
-match anchoring, and the request the client builds. The overlay and the settings panel are verified
-by running the app.
+chunk split, the match anchoring, and the request the client builds. The overlay and the settings
+panel are verified by running the app.
 
 ## Credits
 
