@@ -15,9 +15,10 @@
 import { $getNodeByKey, $isTextNode, defineExtension, type LexicalEditor } from 'lexical';
 
 import { buildDocumentBlocks, type DocumentBlock } from '../core/annotate';
+import { CLOUD_BUDGET, RateMeter } from '../core/budget';
 import { chunkDocument } from '../core/chunk';
 import { check, CheckError, type Backend, type CheckErrorKind, type CheckOptions } from '../core/client';
-import { backend, checkOptions, chunkLimit, triggerMode } from '../core/config';
+import { backend, checkOptions, chunkLimit, triggerMode, warnOnRateLimit } from '../core/config';
 import { addWord, dictionaryEnabled, isIgnored } from '../core/dictionary';
 import { planCheck, prune, type BlockCache } from '../core/incremental';
 import { anchorMatches, carryOver } from '../core/matches';
@@ -93,6 +94,11 @@ export const LanguageToolExtension = defineExtension({
     const cache: BlockCache = new Map();
     /** Every cached answer assumes the request that produced it. */
     let cachedFor: string | undefined;
+    /**
+     * Only the cloud backend is metered. A self-hosted server is unmetered, and
+     * throttling it would only make the local experience worse for nothing.
+     */
+    const meter = new RateMeter(CLOUD_BUDGET);
     /** Only report a distinct failure once, so a stopped server does not spam. */
     let reportedFailure: CheckErrorKind | undefined;
     let hasChecked = false;
@@ -251,6 +257,8 @@ export const LanguageToolExtension = defineExtension({
       const skipped = new Set<number>();
       /** Whether the service answered at all, which is not the same as replacing a block. */
       let anyAnswer = false;
+      /** Set when the budget ran out, so the run is resumed rather than lost. */
+      let deferredBy = 0;
 
       try {
         // Sequential, so the underlines land top down and a long document does
@@ -266,9 +274,28 @@ export const LanguageToolExtension = defineExtension({
           });
 
           for (const chunk of chunkDocument(sending, chunkLimit(), padded)) {
+            // The service counts the text it sees, which is the prose plus the
+            // markup substitutes, so that is what the meter is charged.
+            const cost = options.backend === 'cloud' ? chunk.textLength : 0;
+            const wait = options.backend === 'cloud' ? meter.waitFor(cost) : 0;
+
+            if (wait > 0) {
+              // Deferred, not dropped. Everything not yet answered stays stale,
+              // so this picks up here rather than starting over.
+              if (warnOnRateLimit()) {
+                console.warn(
+                  `[languagetool] rate limit reached, deferring the rest of this check for ${Math.ceil(wait / 1000)}s`,
+                );
+              }
+              deferredBy = Math.max(deferredBy, wait);
+              break;
+            }
+
+            if (cost > 0) meter.record(cost);
             const raw = await check(chunk, options, controller.signal);
             if (token !== checkToken) return;
             anyAnswer = true;
+            meter.accepted();
 
             // Which of this chunk's blocks the answer is actually for. The rest
             // of the run went along for sentence context, and their own results
@@ -308,11 +335,16 @@ export const LanguageToolExtension = defineExtension({
           // Every chunk covering this run has answered, so its blocks are
           // settled and can be cached. Caching per chunk would not be safe,
           // since an oversized block is split across several of them and the
-          // first would store half an answer if a later one failed.
+          // first would store half an answer if a later one failed. A block the
+          // budget stopped this run from reaching was never asked about, so
+          // `replaced` is what separates an empty answer from no answer.
           for (const index of run) {
-            if (!stale.has(index) || skipped.has(index)) continue;
+            if (!stale.has(index) || skipped.has(index) || !replaced.has(index)) continue;
             cache.set(plan.fingerprints[index]!, byBlock.get(index) ?? []);
           }
+
+          // The budget stopped the chunk loop, so it stops the runs too.
+          if (deferredBy > 0) break;
         }
 
         // Every chunk answered, so whatever was wrong is over. Resetting inside
@@ -322,9 +354,24 @@ export const LanguageToolExtension = defineExtension({
 
         matches = settle();
         layer.setMatches(matches);
+
+        if (deferredBy > 0) scheduleRetry(deferredBy);
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return;
         if (token !== checkToken) return;
+
+        // The service knows better than the meter does. Back off, and come back
+        // rather than waiting for the user to type something.
+        if (error instanceof CheckError && error.kind === 'rate') {
+          meter.refuse(error.retryAfterMs);
+          const wait = meter.waitFor(0);
+          if (warnOnRateLimit()) {
+            console.warn(
+              `[languagetool] the service refused for rate, backing off ${Math.ceil(wait / 1000)}s`,
+            );
+          }
+          scheduleRetry(wait);
+        }
 
         // Settle on what did answer. A chunk failing partway through no longer
         // throws away the chunks before it, which on a long document is most of
@@ -350,6 +397,16 @@ export const LanguageToolExtension = defineExtension({
         // paragraph the user has passed through.
         prune(cache, plan.fingerprints);
       }
+    };
+
+    /**
+     * Come back when the budget allows it, rather than on the next keystroke.
+     * The blocks this run did not reach are still stale, so the next run picks
+     * up where this one stopped instead of starting again at the top.
+     */
+    const scheduleRetry = (delayMs: number): void => {
+      clearTimeout(checkTimer);
+      checkTimer = setTimeout(() => void runCheck(), Math.max(delayMs, CHECK_DEBOUNCE_MS[backend()]));
     };
 
     const scheduleCheck = (): void => {

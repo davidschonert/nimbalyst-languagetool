@@ -29,7 +29,6 @@ import {
   assembleDocument,
   BlockBuilder,
   BLOCK_BREAK,
-  type AnnotatedDocument,
   type AnnotationItem,
   type DocumentBlock,
 } from './annotate';
@@ -59,7 +58,7 @@ export function chunkDocument(
   blocks: readonly DocumentBlock[],
   limit: number,
   padded: ReadonlySet<number> = new Set(),
-): AnnotatedDocument[] {
+): DocumentBlock[] {
   return packBlocks(blocks, limit, padded)
     .map(assembleDocument)
     .filter((chunk) => chunk.segments.length > 0);
