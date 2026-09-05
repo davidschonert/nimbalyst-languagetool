@@ -31,7 +31,7 @@ Every feature sits somewhere on this line. Know which stage you are in before ch
 Lexical node tree
   └─ core/annotate.ts   buildDocumentBlocks()    → DocumentBlock[]
        └─ core/incremental.ts  planCheck()       → only the blocks that changed
-            └─ core/chunk.ts  chunkDocument()    → AnnotatedDocument[]  (one per request)
+            └─ core/chunk.ts  chunkDocument()    → DocumentBlock[]  (one per request)
               └─ core/client.ts  check()         → POST /v2/check  → RawMatch[]
                  └─ core/matches.ts  anchorMatches() → AnchoredMatch[]  (nodeKey + in-node offset)
                       └─ ui/UnderlineLayer.ts    → absolutely positioned squiggles
@@ -50,6 +50,7 @@ the cloud token and nothing else.
 | `src/core/annotate.ts`         | Lexical tree → blocks, blocks → AnnotatedText, and the offset mapping back.  |
 | `src/core/chunk.ts`            | Blocks → request-sized chunks. The split rule and the size budget.          |
 | `src/core/incremental.ts`      | Which blocks need re-checking, and the cache of what each one said.         |
+| `src/core/budget.ts`           | What has been sent lately, and whether there is room for more. Cloud only.  |
 | `src/core/client.ts`           | The one HTTP call. Two backends, one request shape. `CheckError` taxonomy.   |
 | `src/core/matches.ts`          | `RawMatch` → `AnchoredMatch`, and carrying an anchor across an edit.         |
 | `src/core/config.ts`           | Typed reads over the host's config bag. Defaults live here, not in manifest. |
@@ -186,6 +187,19 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
   only into Nimbalyst's encrypted secret store. `config.test.ts` asserts that `checkOptions()`
   carries no `apiKey`.
 - Cloud credentials are sent both or neither. One alone makes the service reject the request.
+
+**Rate limiting**
+
+- Only the cloud backend is metered. A self-hosted server is unmetered, so throttling it would cost
+  responsiveness for nothing.
+- The meter holds the service's real figures rather than a cautious fraction of them, and reacts
+  when the budget runs out instead of reserving headroom against it. A 429 is treated as the service
+  knowing better than the meter: it backs off further on each consecutive refusal and honours
+  `Retry-After` when one is sent.
+- Running out of budget defers a check, it does not drop one. The blocks that were not reached stay
+  stale, so the retry continues from there rather than starting again at the top of the document.
+  Nothing is said about it unless `languagetool.warnOnRateLimit` is on, and then only in the
+  console: a deferred check is the limiter working, and it corrects itself within the minute.
 
 **Host workarounds, which should not be cleaned up**
 

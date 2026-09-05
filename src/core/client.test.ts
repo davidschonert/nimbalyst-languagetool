@@ -14,13 +14,21 @@ const local: CheckOptions = {
   language: 'en-US',
 };
 
-function respondWith(payload: unknown, init: { ok?: boolean; status?: number } = {}) {
+function respondWith(
+  payload: unknown,
+  init: { ok?: boolean; status?: number; headers?: Record<string, string> } = {},
+) {
+  // A real Response always carries headers, and the client reads Retry-After
+  // off a refusal, so the fake carries them too rather than being a shape the
+  // production code has to defend against.
+  const headers = new Headers(init.headers ?? {});
   // The parameters are declared so the recorded calls stay typed, which is
   // what lets sentBody read the request body without casting the tuple.
   const fetchMock = vi.fn(async (_input: string, _init: RequestInit) => ({
     ok: init.ok ?? true,
     status: init.status ?? 200,
     statusText: 'Error',
+    headers,
     json: async () => payload,
     text: async () => (typeof payload === 'string' ? payload : JSON.stringify(payload)),
   }));

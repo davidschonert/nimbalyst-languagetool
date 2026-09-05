@@ -87,6 +87,7 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
   const [language, setLanguage] = useState(DEFAULTS.language);
   const [motherTongue, setMotherTongue] = useState('');
   const [picky, setPicky] = useState(false);
+  const [warnOnLimit, setWarnOnLimit] = useState(false);
   const [disabledRules, setDisabledRules] = useState('');
   const [disabledCategories, setDisabledCategories] = useState('');
   const [triggerMode, setTriggerMode] = useState(DEFAULTS.triggerMode);
@@ -111,6 +112,7 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
     setLanguage(readString(KEYS.language, DEFAULTS.language));
     setMotherTongue(readString(KEYS.motherTongue));
     setPicky(readBoolean(KEYS.picky));
+    setWarnOnLimit(readBoolean(KEYS.warnOnRateLimit));
     setDisabledRules(readString(KEYS.disabledRules));
     setDisabledCategories(readString(KEYS.disabledCategories));
     setTriggerMode(readString(KEYS.triggerMode, DEFAULTS.triggerMode) === 'hover' ? 'hover' : 'click');
@@ -377,6 +379,25 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
             <span className="lt-field__label">Picky mode</span>
             <span className="lt-field__hint">
               Additional rules for formal writing. Finds more, including more you will disagree with.
+            </span>
+          </span>
+        </label>
+
+        <label className="lt-toggle">
+          <input
+            type="checkbox"
+            checked={warnOnLimit}
+            onChange={(event) => {
+              setWarnOnLimit(event.target.checked);
+              save(KEYS.warnOnRateLimit, event.target.checked);
+            }}
+          />
+          <span>
+            <span className="lt-field__label">Log deferred checks</span>
+            <span className="lt-field__hint">
+              Writes a line to the developer console whenever the cloud rate limit defers a check.
+              Off by default, since a deferred check corrects itself within the minute. For working
+              out why checking feels slow.
             </span>
           </span>
         </label>

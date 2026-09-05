@@ -32,6 +32,8 @@ The access token is kept in Nimbalyst's encrypted secret store, so it is never w
       option to add new words to your LanguageTool account as well
 - [x] Chunking, so a document larger than the service will accept in one request still gets
       checked, and a long one underlines from the top down instead of all at once
+- [x] Incremental checking, so editing one paragraph re-checks that paragraph rather than the file
+- [x] Rate limiting on the cloud backend, which defers a check rather than having one rejected
 
 Everything still missing is in [ROADMAP.md](ROADMAP.md), with the constraint behind each item.
 

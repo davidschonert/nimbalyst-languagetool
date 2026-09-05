@@ -44,20 +44,6 @@ would be overwritten by whatever the listener assigned.
 
 Left unfixed for now on purpose, so it can go in with whatever else the chunking work turns up.
 
-## Rate limiting
-
-The service allows 20 requests and 75,000 characters per minute on the free tier, and 80 and
-300,000 on Premium. Characters per minute used to bind first, because every check sent the whole
-document: a 20,000 character document allowed a check every 16 seconds on free and every 4 seconds
-on Premium.
-
-Chunking changes that. A check of a long document is now several requests in a row rather than one,
-so requests per minute is worth counting again, and the figure to rate limit against is the chunk
-rather than the file.
-
-The cloud debounce is still one fixed value, which is both too slow for Premium and too fast for
-free. A rate limit that accounts for how much is actually being sent would replace it.
-
 ## A visible indicator of the active backend
 
 From the original brief, and never built. The settings panel shows which backend is selected, but
