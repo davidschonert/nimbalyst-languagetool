@@ -30,8 +30,9 @@ Every feature sits somewhere on this line. Know which stage you are in before ch
 ```
 Lexical node tree
   └─ core/annotate.ts   buildDocumentBlocks()    → DocumentBlock[]
-       └─ core/chunk.ts  chunkDocument()         → AnnotatedDocument[]  (one per request)
-            └─ core/client.ts  check()           → POST /v2/check  → RawMatch[]
+       └─ core/incremental.ts  planCheck()       → only the blocks that changed
+            └─ core/chunk.ts  chunkDocument()    → AnnotatedDocument[]  (one per request)
+              └─ core/client.ts  check()         → POST /v2/check  → RawMatch[]
                  └─ core/matches.ts  anchorMatches() → AnchoredMatch[]  (nodeKey + in-node offset)
                       └─ ui/UnderlineLayer.ts    → absolutely positioned squiggles
                            └─ ui/MatchPopover.ts → the correction card
@@ -48,6 +49,7 @@ the cloud token and nothing else.
 | `src/index.ts`                 | `activate` / `deactivate`, and the exports the manifest names.               |
 | `src/core/annotate.ts`         | Lexical tree → blocks, blocks → AnnotatedText, and the offset mapping back.  |
 | `src/core/chunk.ts`            | Blocks → request-sized chunks. The split rule and the size budget.          |
+| `src/core/incremental.ts`      | Which blocks need re-checking, and the cache of what each one said.         |
 | `src/core/client.ts`           | The one HTTP call. Two backends, one request shape. `CheckError` taxonomy.   |
 | `src/core/matches.ts`          | `RawMatch` → `AnchoredMatch`, and carrying an anchor across an edit.         |
 | `src/core/config.ts`           | Typed reads over the host's config bag. Defaults live here, not in manifest. |
@@ -111,9 +113,12 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
   Lexical, and the tests drive real `insertParagraph` and `deleteCharacter` calls rather than a
   hand-made dirty set. Anything that does not match a shape exactly is left alone and its matches
   are dropped, because guessing where text went is how an anchor lands on the wrong word.
-- `docVersion` still increments on every text change, so a response computed against the older tree
-  is discarded rather than re-anchored. Carrying anchors is for what is already painted, not for
-  results in flight.
+- A response is discarded rather than re-anchored when the text under it moved while it was in
+  flight. That question is asked per chunk, against the set of nodes dirtied since the run began,
+  not per document: editing one node cannot move another node's in-node offsets, so a chunk covering
+  untouched nodes is still good. It used to be a document-wide version counter, which was safe but
+  meant one keystroke abandoned every chunk still to come and a long document's tail was never
+  reached. Carrying anchors is for what is already painted, not for results in flight.
 
 **Chunk boundaries**
 
@@ -131,6 +136,39 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
 - Size is measured twice. The service's cap counts the text it sees, which is prose plus the
   `interpretAs` substitutes; the raw length is what a match offset indexes. A chunk is under the
   limit on both.
+- The packer is told which blocks were padded for context and backs up to a boundary that does not
+  separate one from its neighbours. It can only back up while the blocks it moves still fit in the
+  chunk they move to, so a run long enough to need a boundary in an awkward place still gets one,
+  and that block is checked without the context on one side. `chunk.test.ts` holds both the case
+  where backing up works and the case where the budget refuses it.
+
+**Incremental checking**
+
+- A block is only reused when its content and its node keys both match. Identical text in a
+  recreated node is a different anchor, so the fingerprint covers the node keys and their offsets
+  as well as the items. `fingerprint()` in `incremental.ts` is the only place this is decided.
+- The fingerprint holds the block's whole content rather than a hash of it. A collision would serve
+  one block's matches for another block's text, which is an underline over something nobody
+  checked, and that is the failure the module exists to prevent rather than to cause.
+- A stale block is always sent with its immediate neighbours, and only the matches landing in the
+  stale block are kept. LanguageTool's repetition and style rules reach across paragraph breaks, so
+  a block sent alone loses them silently, and a match found on the document's first check would
+  disappear the moment its block was re-checked by itself.
+- The map a run assembles the document from is carried across an edit exactly as the painted list
+  is. It is what `settle()` rebuilds from, so leaving it on the pre-edit anchors silently undoes
+  every `carryOver` the listener did mid-run and puts an anchor back over text the service never
+  judged. Neither the token nor the per-chunk guard catches that: they stop a chunk's answer being
+  applied, not the reassembly after it.
+- The neighbours are context, not work. Their own cached matches are kept as they are, so a
+  cross-paragraph match that a neighbour holds *about* the edited block is not refreshed until that
+  neighbour changes on its own. That is the accepted residual of checking incrementally, and
+  widening it would mean re-checking a block's neighbours on every edit.
+- The cache holds unfiltered matches. The dictionary and the dismissals are applied where the
+  document is assembled, so adding a word or ignoring a rule does not have to discard a document's
+  worth of answers, and cannot leave the cache disagreeing with what is painted.
+- Any change to what is asked, meaning the language, `picky`, the mother tongue, the disabled rules
+  and categories, or the backend, empties the cache. An answer is only good for the request that
+  produced it.
 
 **Privacy**
 

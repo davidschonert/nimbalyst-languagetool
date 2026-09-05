@@ -14,12 +14,13 @@
 
 import { $getNodeByKey, $isTextNode, defineExtension, type LexicalEditor } from 'lexical';
 
-import { buildDocumentBlocks, type AnnotatedDocument } from '../core/annotate';
+import { buildDocumentBlocks, type DocumentBlock } from '../core/annotate';
 import { chunkDocument } from '../core/chunk';
-import { check, CheckError, type Backend, type CheckErrorKind } from '../core/client';
+import { check, CheckError, type Backend, type CheckErrorKind, type CheckOptions } from '../core/client';
 import { backend, checkOptions, chunkLimit, triggerMode } from '../core/config';
 import { addWord, dictionaryEnabled, isIgnored } from '../core/dictionary';
-import { anchorMatches, carryOver, replaceCovered } from '../core/matches';
+import { planCheck, prune, type BlockCache } from '../core/incremental';
+import { anchorMatches, carryOver } from '../core/matches';
 import { readApiKey } from '../core/secrets';
 import type { AnchoredMatch } from '../core/types';
 import { MatchPopover } from '../ui/MatchPopover';
@@ -64,12 +65,34 @@ export const LanguageToolExtension = defineExtension({
     let checkToken = 0;
     let inFlight: AbortController | undefined;
     /**
-     * Bumped by every update that changes text. The token alone does not catch
-     * an edit made while a check is in flight, because an edit does not start a
-     * new check until the debounce fires — so a response built from the older
-     * tree would be anchored to offsets that have already moved.
+     * Nodes edited while a check is in flight, collected by the update
+     * listener for whichever run is open.
+     *
+     * The token alone does not catch an edit made mid-run, because an edit does
+     * not start a new check until the debounce fires, so a response built from
+     * the older tree would be anchored to offsets that have already moved. This
+     * used to be a document-wide version counter, which meant one keystroke
+     * threw away every chunk still to come and a long document's tail was never
+     * reached. An anchor is a node key and an offset inside that node, so
+     * editing one node cannot move another node's offsets: the question is per
+     * chunk, and asking it per chunk is both safe and survivable.
      */
-    let docVersion = 0;
+    let dirtiedDuringRun: Set<string> | undefined;
+    /**
+     * The open run's per-block view of the document, so an edit moves it too.
+     *
+     * `settle()` rebuilds what is painted from this map, so leaving it on the
+     * pre-edit anchors would undo every `carryOver` the listener performed
+     * while the run was in flight, and put an anchor back over text the service
+     * never judged. Replacing an entry never touches the cache's own array,
+     * which is right: an edited block's fingerprint has changed, so it is stale
+     * on the next check regardless.
+     */
+    let heldDuringRun: Map<number, AnchoredMatch[]> | undefined;
+    /** What each block said last time, so an unchanged one is not re-sent. */
+    const cache: BlockCache = new Map();
+    /** Every cached answer assumes the request that produced it. */
+    let cachedFor: string | undefined;
     /** Only report a distinct failure once, so a stopped server does not spam. */
     let reportedFailure: CheckErrorKind | undefined;
     let hasChecked = false;
@@ -112,19 +135,52 @@ export const LanguageToolExtension = defineExtension({
     // hide() reports the close, which is what clears the underline tint.
     const closeCard = (): void => popover.hide();
 
+    /**
+     * Everything about a request that changes what comes back. A cached answer
+     * is only good while this holds, so changing the language or turning on
+     * picky throws the whole cache away rather than mixing the results of two
+     * different settings into one document.
+     */
+    const requestShape = (options: CheckOptions): string =>
+      JSON.stringify([
+        options.backend,
+        options.baseUrl,
+        options.language,
+        options.picky ?? false,
+        options.motherTongue ?? '',
+        options.preferredVariants ?? [],
+        options.disabledRules ?? [],
+        options.disabledCategories ?? [],
+        options.username ?? '',
+      ]);
+
+    /**
+     * Applied here rather than baked into what is cached, so adding a word to
+     * the dictionary or dismissing one occurrence takes effect without
+     * discarding a document's worth of answers.
+     *
+     * Ignoring a whole rule is not one of those. It joins `disabledRules`, which
+     * is part of the request, so the next run finds a different `requestShape`
+     * and empties the cache. That is correct rather than wasteful, since the
+     * answers were all computed with that rule enabled.
+     */
+    const visible = (anchor: AnchoredMatch): boolean =>
+      !ignoredAnchors.has(anchorId(anchor)) &&
+      !ignoredRules.has(anchor.match.ruleId) &&
+      !(anchor.match.word !== '' && isIgnored(anchor.match.word));
+
     const runCheck = async (): Promise<void> => {
       const token = ++checkToken;
-      const version = docVersion;
       inFlight?.abort();
       const controller = new AbortController();
       inFlight = controller;
 
-      // One request per chunk. A document over the service's size cap would
-      // otherwise fail outright, and splitting it also means the top of a long
-      // document comes back while the rest is still in flight.
-      let chunks: AnnotatedDocument[] = [];
+      const dirtied = new Set<string>();
+      dirtiedDuringRun = dirtied;
+
+      let blocks: DocumentBlock[] = [];
       editor.getEditorState().read(() => {
-        chunks = chunkDocument(buildDocumentBlocks(), chunkLimit());
+        blocks = buildDocumentBlocks();
       });
 
       const options = checkOptions();
@@ -139,28 +195,124 @@ export const LanguageToolExtension = defineExtension({
         const apiKey = await readApiKey();
         if (apiKey) options.apiKey = apiKey;
       }
+      if (token !== checkToken) return;
 
-      // Every match this pass produced. The running repaint below is the
-      // partial view, and this is what the document settles on.
-      const collected: AnchoredMatch[] = [];
+      const shape = requestShape(options);
+      if (shape !== cachedFor) {
+        cache.clear();
+        cachedFor = shape;
+      }
+
+      const plan = planCheck(blocks, new Set(cache.keys()));
+      const stale = new Set(plan.stale);
+
+      // Each text node belongs to exactly one block, since the walk visits it
+      // once, so this is what sorts a returned match into the block it came
+      // from and separates a run's stale blocks from its context.
+      const blockOfNode = new Map<string, number>();
+      blocks.forEach((block, index) => {
+        for (const segment of block.segments) blockOfNode.set(segment.nodeKey, index);
+      });
+
+      // The document is assembled from this, one entry per block, so a repaint
+      // is always the union of every block's current answer.
+      const byBlock = new Map<number, AnchoredMatch[]>();
+      plan.fingerprints.forEach((print, index) => {
+        // Copied, not aliased. The cache's array must not be reachable from
+        // anything that carries anchors across an edit or replaces an answer.
+        if (!stale.has(index)) byBlock.set(index, [...(cache.get(print) ?? [])]);
+      });
+      // A block waiting on its answer keeps what is painted on it, so editing a
+      // paragraph does not blank it until the service replies.
+      for (const anchor of matches) {
+        const index = blockOfNode.get(anchor.nodeKey);
+        if (index === undefined || !stale.has(index)) continue;
+        const held = byBlock.get(index);
+        if (held) held.push(anchor);
+        else byBlock.set(index, [anchor]);
+      }
+
+      const settle = (): AnchoredMatch[] => {
+        const all: AnchoredMatch[] = [];
+        for (let index = 0; index < plan.fingerprints.length; index += 1) {
+          for (const anchor of byBlock.get(index) ?? []) {
+            if (visible(anchor)) all.push(anchor);
+          }
+        }
+        return all;
+      };
+
+      // A block is only replaced by the first chunk that answers for it. An
+      // oversized block is split across chunks, so clearing on each one would
+      // let the second wipe what the first had just contributed.
+      heldDuringRun = byBlock;
+
+      const replaced = new Set<number>();
+      const skipped = new Set<number>();
+      /** Whether the service answered at all, which is not the same as replacing a block. */
+      let anyAnswer = false;
 
       try {
         // Sequential, so the underlines land top down and a long document does
         // not fire every one of its requests at the service at once.
-        for (const chunk of chunks) {
-          const raw = await check(chunk, options, controller.signal);
-          if (token !== checkToken || version !== docVersion) return;
+        for (const run of plan.runs) {
+          const sending = run.map((index) => blocks[index]!);
+          // Where the stale blocks sit within this run, so the packer can avoid
+          // cutting one off from the neighbour that was added to give it
+          // context.
+          const padded = new Set<number>();
+          run.forEach((index, position) => {
+            if (stale.has(index)) padded.add(position);
+          });
 
-          const fresh = anchorMatches(chunk, raw, isIgnored).filter(
-            (anchor) => !ignoredAnchors.has(anchorId(anchor)),
-          );
-          collected.push(...fresh);
+          for (const chunk of chunkDocument(sending, chunkLimit(), padded)) {
+            const raw = await check(chunk, options, controller.signal);
+            if (token !== checkToken) return;
+            anyAnswer = true;
 
-          // Replace only the ranges this chunk checked. The chunks still in
-          // flight keep the underlines they already had, so the document does
-          // not blank out and refill on every check.
-          matches = replaceCovered(matches, fresh, chunk);
-          layer.setMatches(matches);
+            // Which of this chunk's blocks the answer is actually for. The rest
+            // of the run went along for sentence context, and their own results
+            // are already cached.
+            const answered = new Set<number>();
+            let moved = false;
+            for (const segment of chunk.segments) {
+              if (dirtied.has(segment.nodeKey)) moved = true;
+              const index = blockOfNode.get(segment.nodeKey);
+              if (index !== undefined && stale.has(index)) answered.add(index);
+            }
+
+            // The text under this chunk changed while it was in flight, so its
+            // offsets have moved and the answer is not about this document any
+            // more. Leave those blocks stale for the next check rather than
+            // abandoning every chunk still to come.
+            if (moved) {
+              for (const index of answered) skipped.add(index);
+              continue;
+            }
+
+            for (const index of answered) {
+              if (replaced.has(index)) continue;
+              replaced.add(index);
+              byBlock.set(index, []);
+            }
+            for (const anchor of anchorMatches(chunk, raw)) {
+              const index = blockOfNode.get(anchor.nodeKey);
+              if (index === undefined || !answered.has(index)) continue;
+              byBlock.get(index)?.push(anchor);
+            }
+
+            matches = settle();
+            layer.setMatches(matches);
+          }
+
+          // Every chunk covering this run has answered, so its blocks are
+          // settled and can be cached. Caching per chunk would not be safe,
+          // since an oversized block is split across several of them and the
+          // first would store half an answer if a later one failed.
+          for (const index of run) {
+            if (!stale.has(index) || skipped.has(index)) continue;
+            cache.set(plan.fingerprints[index]!, byBlock.get(index) ?? []);
+          }
         }
 
         // Every chunk answered, so whatever was wrong is over. Resetting inside
@@ -168,9 +320,7 @@ export const LanguageToolExtension = defineExtension({
         // since an earlier chunk succeeding would clear the flag first.
         reportedFailure = undefined;
 
-        // The fresh set is the authoritative one, so anything held over from a
-        // node no chunk covers any more goes now.
-        matches = collected;
+        matches = settle();
         layer.setMatches(matches);
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return;
@@ -179,19 +329,26 @@ export const LanguageToolExtension = defineExtension({
         // Settle on what did answer. A chunk failing partway through no longer
         // throws away the chunks before it, which on a long document is most of
         // the work and, on cloud, the expected shape of hitting a rate limit.
-        matches = collected;
+        matches = settle();
         layer.setMatches(matches);
 
         // Nothing answered at all, which is what a local server that is not
         // running looks like. That is an expected state rather than an error to
         // shout about, so go quiet and try again on the next pause.
-        if (collected.length === 0) closeCard();
+        if (!anyAnswer) closeCard();
 
         const kind = error instanceof CheckError ? error.kind : 'http';
         if (kind !== reportedFailure) {
           reportedFailure = kind;
           console.warn('[languagetool] check failed:', (error as Error).message);
         }
+      } finally {
+        if (dirtiedDuringRun === dirtied) dirtiedDuringRun = undefined;
+        if (heldDuringRun === byBlock) heldDuringRun = undefined;
+        // Outside the try, so a failure partway through still leaves the cache
+        // holding one entry per live block rather than a version of every
+        // paragraph the user has passed through.
+        prune(cache, plan.fingerprints);
       }
     };
 
@@ -288,7 +445,16 @@ export const LanguageToolExtension = defineExtension({
         // is still in flight. Everything outside the node only moved on screen,
         // so it repaints immediately.
         if (dirtyLeaves.size > 0) {
-          docVersion++;
+          // A check in flight needs to know which nodes moved under it, so it
+          // can discard the chunks that covered them and keep the rest.
+          if (dirtiedDuringRun) {
+            for (const key of dirtyLeaves) dirtiedDuringRun.add(key);
+          }
+          if (heldDuringRun) {
+            for (const [index, held] of heldDuringRun) {
+              heldDuringRun.set(index, carryOver(held, dirtyLeaves, prevEditorState, editorState));
+            }
+          }
           matches = carryOver(matches, dirtyLeaves, prevEditorState, editorState);
           if (popover.current && dirtyLeaves.has(popover.current.nodeKey)) closeCard();
         }

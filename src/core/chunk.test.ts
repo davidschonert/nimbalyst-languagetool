@@ -263,3 +263,73 @@ describe('the room left in a part', () => {
     expect(chunks.map(flatten)).toEqual([PROSE]);
   });
 });
+
+describe('keeping a padded block with its neighbours', () => {
+  /** A paragraph of an exact length, so the packing arithmetic is checkable. */
+  const sized = (length: number, mark: string): string => mark.repeat(length);
+
+  it('backs up to a boundary that does not strip the pad', () => {
+    // Block 2 is the stale one and blocks 1 and 3 are its context. Packing
+    // greedily would close after block 1 and cut block 2 off from its left
+    // neighbour, so the boundary moves back one.
+    const { blocks } = walk(() => {
+      paragraph(sized(50, 'a'));
+      paragraph(sized(40, 'b'));
+      paragraph(sized(40, 'c'));
+      paragraph(sized(10, 'd'));
+    });
+
+    const greedy = chunkDocument(blocks, 100);
+    expect(greedy.map((chunk) => flatten(chunk)[0])).toEqual(['a', 'c']);
+
+    const padded = chunkDocument(blocks, 100, new Set([2]));
+
+    // The stale block now travels with both of its neighbours.
+    expect(padded.map((chunk) => flatten(chunk)[0])).toEqual(['a', 'b']);
+    expect(flatten(padded[1]!)).toBe(
+      [sized(40, 'b'), sized(40, 'c'), sized(10, 'd')].join('\n\n'),
+    );
+  });
+
+  it('gives up on the pad when the budget leaves no boundary that keeps it', () => {
+    // Straight from the review. The run is 916 characters against a budget of
+    // 700, and the stale block is padded on both sides, so whichever boundary
+    // is chosen takes one of them away. The packer settles rather than looping.
+    const { blocks } = walk(() => {
+      paragraph(sized(601, 'a'));
+      paragraph(sized(14, 'b'));
+      paragraph(sized(301, 'c'));
+    });
+
+    const chunks = chunkDocument(blocks, 700, new Set([1]));
+
+    expect(chunks.map((chunk) => flatten(chunk).length)).toEqual([617, 301]);
+    for (const chunk of chunks) expect(flatten(chunk).length).toBeLessThanOrEqual(700);
+  });
+
+  it('does not move a block into a chunk it does not fit', () => {
+    // Backing up is only worth doing while the blocks that move still fit
+    // where they are going. Here they do not, so the greedy boundary stands.
+    const { blocks } = walk(() => {
+      paragraph(sized(30, 'a'));
+      paragraph(sized(60, 'b'));
+      paragraph(sized(60, 'c'));
+    });
+
+    const chunks = chunkDocument(blocks, 100, new Set([1]));
+
+    expect(chunks.map((chunk) => flatten(chunk).length)).toEqual([92, 60]);
+  });
+
+  it('changes nothing when no block is padded', () => {
+    const { blocks } = walk(() => {
+      paragraph(sized(50, 'a'));
+      paragraph(sized(40, 'b'));
+      paragraph(sized(40, 'c'));
+    });
+
+    expect(chunkDocument(blocks, 100).map(flatten)).toEqual(
+      chunkDocument(blocks, 100, new Set()).map(flatten),
+    );
+  });
+});
