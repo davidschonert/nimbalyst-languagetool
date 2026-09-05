@@ -78,6 +78,17 @@ export const LanguageToolExtension = defineExtension({
      * chunk, and asking it per chunk is both safe and survivable.
      */
     let dirtiedDuringRun: Set<string> | undefined;
+    /**
+     * The open run's per-block view of the document, so an edit moves it too.
+     *
+     * `settle()` rebuilds what is painted from this map, so leaving it on the
+     * pre-edit anchors would undo every `carryOver` the listener performed
+     * while the run was in flight, and put an anchor back over text the service
+     * never judged. Replacing an entry never touches the cache's own array,
+     * which is right: an edited block's fingerprint has changed, so it is stale
+     * on the next check regardless.
+     */
+    let heldDuringRun: Map<number, AnchoredMatch[]> | undefined;
     /** What each block said last time, so an unchanged one is not re-sent. */
     const cache: BlockCache = new Map();
     /** Every cached answer assumes the request that produced it. */
@@ -144,9 +155,14 @@ export const LanguageToolExtension = defineExtension({
       ]);
 
     /**
-     * The dictionary and the dismissals are applied here rather than baked into
-     * what is cached, so adding a word or ignoring a rule takes effect without
+     * Applied here rather than baked into what is cached, so adding a word to
+     * the dictionary or dismissing one occurrence takes effect without
      * discarding a document's worth of answers.
+     *
+     * Ignoring a whole rule is not one of those. It joins `disabledRules`, which
+     * is part of the request, so the next run finds a different `requestShape`
+     * and empties the cache. That is correct rather than wasteful, since the
+     * answers were all computed with that rule enabled.
      */
     const visible = (anchor: AnchoredMatch): boolean =>
       !ignoredAnchors.has(anchorId(anchor)) &&
@@ -202,7 +218,9 @@ export const LanguageToolExtension = defineExtension({
       // is always the union of every block's current answer.
       const byBlock = new Map<number, AnchoredMatch[]>();
       plan.fingerprints.forEach((print, index) => {
-        if (!stale.has(index)) byBlock.set(index, cache.get(print) ?? []);
+        // Copied, not aliased. The cache's array must not be reachable from
+        // anything that carries anchors across an edit or replaces an answer.
+        if (!stale.has(index)) byBlock.set(index, [...(cache.get(print) ?? [])]);
       });
       // A block waiting on its answer keeps what is painted on it, so editing a
       // paragraph does not blank it until the service replies.
@@ -227,18 +245,30 @@ export const LanguageToolExtension = defineExtension({
       // A block is only replaced by the first chunk that answers for it. An
       // oversized block is split across chunks, so clearing on each one would
       // let the second wipe what the first had just contributed.
+      heldDuringRun = byBlock;
+
       const replaced = new Set<number>();
       const skipped = new Set<number>();
+      /** Whether the service answered at all, which is not the same as replacing a block. */
+      let anyAnswer = false;
 
       try {
         // Sequential, so the underlines land top down and a long document does
         // not fire every one of its requests at the service at once.
         for (const run of plan.runs) {
           const sending = run.map((index) => blocks[index]!);
+          // Where the stale blocks sit within this run, so the packer can avoid
+          // cutting one off from the neighbour that was added to give it
+          // context.
+          const padded = new Set<number>();
+          run.forEach((index, position) => {
+            if (stale.has(index)) padded.add(position);
+          });
 
-          for (const chunk of chunkDocument(sending, chunkLimit())) {
+          for (const chunk of chunkDocument(sending, chunkLimit(), padded)) {
             const raw = await check(chunk, options, controller.signal);
             if (token !== checkToken) return;
+            anyAnswer = true;
 
             // Which of this chunk's blocks the answer is actually for. The rest
             // of the run went along for sentence context, and their own results
@@ -260,8 +290,6 @@ export const LanguageToolExtension = defineExtension({
               continue;
             }
 
-            reportedFailure = undefined;
-
             for (const index of answered) {
               if (replaced.has(index)) continue;
               replaced.add(index);
@@ -276,13 +304,21 @@ export const LanguageToolExtension = defineExtension({
             matches = settle();
             layer.setMatches(matches);
           }
+
+          // Every chunk covering this run has answered, so its blocks are
+          // settled and can be cached. Caching per chunk would not be safe,
+          // since an oversized block is split across several of them and the
+          // first would store half an answer if a later one failed.
+          for (const index of run) {
+            if (!stale.has(index) || skipped.has(index)) continue;
+            cache.set(plan.fingerprints[index]!, byBlock.get(index) ?? []);
+          }
         }
 
-        for (const index of plan.stale) {
-          if (skipped.has(index)) continue;
-          cache.set(plan.fingerprints[index]!, byBlock.get(index) ?? []);
-        }
-        prune(cache, plan.fingerprints);
+        // Every chunk answered, so whatever was wrong is over. Resetting inside
+        // the loop would let a chunk that fails every time warn on every check,
+        // since an earlier chunk succeeding would clear the flag first.
+        reportedFailure = undefined;
 
         matches = settle();
         layer.setMatches(matches);
@@ -299,7 +335,7 @@ export const LanguageToolExtension = defineExtension({
         // Nothing answered at all, which is what a local server that is not
         // running looks like. That is an expected state rather than an error to
         // shout about, so go quiet and try again on the next pause.
-        if (replaced.size === 0) closeCard();
+        if (!anyAnswer) closeCard();
 
         const kind = error instanceof CheckError ? error.kind : 'http';
         if (kind !== reportedFailure) {
@@ -308,6 +344,11 @@ export const LanguageToolExtension = defineExtension({
         }
       } finally {
         if (dirtiedDuringRun === dirtied) dirtiedDuringRun = undefined;
+        if (heldDuringRun === byBlock) heldDuringRun = undefined;
+        // Outside the try, so a failure partway through still leaves the cache
+        // holding one entry per live block rather than a version of every
+        // paragraph the user has passed through.
+        prune(cache, plan.fingerprints);
       }
     };
 
@@ -408,6 +449,11 @@ export const LanguageToolExtension = defineExtension({
           // can discard the chunks that covered them and keep the rest.
           if (dirtiedDuringRun) {
             for (const key of dirtyLeaves) dirtiedDuringRun.add(key);
+          }
+          if (heldDuringRun) {
+            for (const [index, held] of heldDuringRun) {
+              heldDuringRun.set(index, carryOver(held, dirtyLeaves, prevEditorState, editorState));
+            }
           }
           matches = carryOver(matches, dirtyLeaves, prevEditorState, editorState);
           if (popover.current && dirtyLeaves.has(popover.current.nodeKey)) closeCard();

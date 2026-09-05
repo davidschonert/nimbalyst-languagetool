@@ -58,36 +58,89 @@ function rawLengthOf(item: AnnotationItem): number {
 export function chunkDocument(
   blocks: readonly DocumentBlock[],
   limit: number,
+  padded: ReadonlySet<number> = new Set(),
 ): AnnotatedDocument[] {
-  return packBlocks(blocks, limit)
+  return packBlocks(blocks, limit, padded)
     .map(assembleDocument)
     .filter((chunk) => chunk.segments.length > 0);
+}
+
+/** What a run of block positions costs once assembly has joined them. */
+function measure(
+  blocks: readonly DocumentBlock[],
+  positions: readonly number[],
+): { raw: number; text: number } {
+  let raw = 0;
+  let text = 0;
+
+  for (const [order, position] of positions.entries()) {
+    if (order > 0) {
+      raw += BLOCK_BREAK.length;
+      text += BLOCK_BREAK.length;
+    }
+    const block = blocks[position]!;
+    raw += block.rawLength;
+    text += block.textLength;
+  }
+
+  return { raw, text };
 }
 
 /**
  * Group consecutive blocks into chunks, splitting any single block that is
  * larger than the budget on its own.
+ *
+ * `padded` names the positions that were given neighbours for context, in the
+ * caller's coordinates. A boundary immediately before or after one of those
+ * takes that context away again, which is a silent loss of exactly the rules
+ * the pad was added for, so the packer backs up to an earlier boundary when it
+ * can.
+ *
+ * It cannot always. Blocks only move into the next chunk while they still fit
+ * there, so a run long enough to need a boundary in an awkward place gets one.
+ * That residual is recorded in CLAUDE.md rather than pretended away: a pad the
+ * budget cannot honour will always be possible.
  */
-export function packBlocks(blocks: readonly DocumentBlock[], limit: number): DocumentBlock[][] {
+export function packBlocks(
+  blocks: readonly DocumentBlock[],
+  limit: number,
+  padded: ReadonlySet<number> = new Set(),
+): DocumentBlock[][] {
   const budget = Math.max(1, Math.floor(limit));
   const chunks: DocumentBlock[][] = [];
 
-  let current: DocumentBlock[] = [];
+  /** A boundary after `position` separates it from the block that follows. */
+  const separates = (position: number): boolean =>
+    padded.has(position) || padded.has(position + 1);
+
+  const fits = (positions: readonly number[]): boolean => {
+    const { raw, text } = measure(blocks, positions);
+    return raw <= budget && text <= budget;
+  };
+
+  let current: number[] = [];
   let raw = 0;
   let text = 0;
 
-  for (const block of blocks) {
+  const take = (positions: number[]): void => {
+    current = positions;
+    const size = measure(blocks, positions);
+    raw = size.raw;
+    text = size.text;
+  };
+
+  const flush = (): void => {
+    if (current.length > 0) chunks.push(current.map((position) => blocks[position]!));
+    take([]);
+  };
+
+  for (const [position, block] of blocks.entries()) {
     if (block.rawLength > budget || block.textLength > budget) {
       // Oversized, so it is split, and each part becomes a chunk on its own.
       // Packing a part next to a neighbour would put a paragraph break at
       // whatever the split rule had to settle for, and that is only a sentence
       // end in the best case.
-      if (current.length > 0) {
-        chunks.push(current);
-        current = [];
-        raw = 0;
-        text = 0;
-      }
+      flush();
       for (const part of splitBlock(block, budget)) chunks.push([part]);
       continue;
     }
@@ -99,22 +152,36 @@ export function packBlocks(blocks: readonly DocumentBlock[], limit: number): Doc
       raw + gap + block.rawLength > budget || text + gap + block.textLength > budget;
 
     if (current.length > 0 && overflows) {
-      chunks.push(current);
-      current = [];
-      raw = 0;
-      text = 0;
+      // How many blocks stay behind. All of them is the greedy answer, and the
+      // right one whenever the boundary it leaves does not strip a pad.
+      let keep = current.length;
+
+      if (separates(current[keep - 1]!)) {
+        for (let candidate = keep - 1; candidate >= 1; candidate -= 1) {
+          // Whatever moves forward has to fit in the chunk it moves to.
+          if (!fits([...current.slice(candidate), position])) break;
+          if (!separates(current[candidate - 1]!)) {
+            keep = candidate;
+            break;
+          }
+        }
+      }
+
+      const carry = current.slice(keep);
+      chunks.push(current.slice(0, keep).map((index) => blocks[index]!));
+      take(carry);
     }
 
     if (current.length > 0) {
       raw += BLOCK_BREAK.length;
       text += BLOCK_BREAK.length;
     }
-    current.push(block);
+    current.push(position);
     raw += block.rawLength;
     text += block.textLength;
   }
 
-  if (current.length > 0) chunks.push(current);
+  flush();
   return chunks;
 }
 

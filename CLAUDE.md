@@ -136,6 +136,11 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
 - Size is measured twice. The service's cap counts the text it sees, which is prose plus the
   `interpretAs` substitutes; the raw length is what a match offset indexes. A chunk is under the
   limit on both.
+- The packer is told which blocks were padded for context and backs up to a boundary that does not
+  separate one from its neighbours. It can only back up while the blocks it moves still fit in the
+  chunk they move to, so a run long enough to need a boundary in an awkward place still gets one,
+  and that block is checked without the context on one side. `chunk.test.ts` holds both the case
+  where backing up works and the case where the budget refuses it.
 
 **Incremental checking**
 
@@ -149,6 +154,11 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
   stale block are kept. LanguageTool's repetition and style rules reach across paragraph breaks, so
   a block sent alone loses them silently, and a match found on the document's first check would
   disappear the moment its block was re-checked by itself.
+- The map a run assembles the document from is carried across an edit exactly as the painted list
+  is. It is what `settle()` rebuilds from, so leaving it on the pre-edit anchors silently undoes
+  every `carryOver` the listener did mid-run and puts an anchor back over text the service never
+  judged. Neither the token nor the per-chunk guard catches that: they stop a chunk's answer being
+  applied, not the reassembly after it.
 - The neighbours are context, not work. Their own cached matches are kept as they are, so a
   cross-paragraph match that a neighbour holds *about* the edited block is not refreshed until that
   neighbour changes on its own. That is the accepted residual of checking incrementally, and
