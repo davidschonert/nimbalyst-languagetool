@@ -7,6 +7,25 @@ repeat this list, because two lists drift apart.
 Each entry carries the constraint behind it rather than only a title. The numbers and the reasons
 are the part that is expensive to recover later.
 
+## One rate meter across every copy of the extension
+
+Found while testing the deferral by hand. The extension log shows `[languagetool] activated` twice
+in the same second, from two different `blob:` URLs, which means the host loaded two copies of the
+bundle rather than activating one copy twice.
+
+Two copies are two module graphs, so module-scope state is not shared between them. The rate meter
+now lives at module scope, which stops each editor within one copy from claiming a full budget, but
+two copies still hold a meter each and the account's limit can be exceeded by that factor.
+
+What is not known yet is why there are two, and whether it is avoidable. It may be one per window,
+one per editor host, or the settings panel loading its own copy. That is the thing to find out
+first, because it decides whether this is worth solving at all: one copy per window is a real
+problem, and one copy plus a panel that never checks anything is not.
+
+If it does need solving, the meter has to live somewhere both copies can see, which for this host
+means the configuration bag or a `BroadcastChannel`. Neither is free, and both are worse than
+finding out the extension only needs loading once.
+
 ## Clear the underline when a correction is applied
 
 Found while using the extension. Click a replacement in the card and the word stays underlined until

@@ -44,6 +44,21 @@ const CHECK_DEBOUNCE_MS: Record<Backend, number> = {
 /** Grace period so moving from an underline onto the card does not close it. */
 const HOVER_CLOSE_MS = 140;
 
+/**
+ * One meter for the extension, not one per editor.
+ *
+ * The budget belongs to the LanguageTool account, so every document open at
+ * once is spending the same one. `register` runs per editor, and a meter built
+ * there gives each document a full budget of its own: with three documents open
+ * the extension would send three times the account's limit before any of them
+ * deferred, which is the moment a limiter is least use if it is wrong.
+ *
+ * Only the cloud backend is charged against it. A self-hosted server is
+ * unmetered, and throttling it would only make the local experience worse for
+ * nothing.
+ */
+const meter = new RateMeter(CLOUD_BUDGET);
+
 /** Stable enough to dismiss one occurrence without dismissing its neighbors. */
 function anchorId(anchor: AnchoredMatch): string {
   return anchor.nodeKey + ':' + anchor.offset + ':' + anchor.match.ruleId;
@@ -94,11 +109,6 @@ export const LanguageToolExtension = defineExtension({
     const cache: BlockCache = new Map();
     /** Every cached answer assumes the request that produced it. */
     let cachedFor: string | undefined;
-    /**
-     * Only the cloud backend is metered. A self-hosted server is unmetered, and
-     * throttling it would only make the local experience worse for nothing.
-     */
-    const meter = new RateMeter(CLOUD_BUDGET);
     /** Only report a distinct failure once, so a stopped server does not spam. */
     let reportedFailure: CheckErrorKind | undefined;
     let hasChecked = false;
