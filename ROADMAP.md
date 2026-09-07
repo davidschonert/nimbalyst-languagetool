@@ -7,18 +7,14 @@ repeat this list, because two lists drift apart.
 Each entry carries the constraint behind it rather than only a title. The numbers and the reasons
 are the part that is expensive to recover later.
 
-## One rate meter across every copy of the extension
+## One rate meter across every Nimbalyst window
 
-Found while testing the deferral by hand. The extension log shows `[languagetool] activated` twice
-in the same second, from two different `blob:` URLs, which means the host loaded two copies of the
-bundle rather than activating one copy twice.
+The extension is loaded once per window, and each copy holds its own rate meter, so two windows
+spend two budgets against one LanguageTool account.
 
-Two copies are two module graphs, so module-scope state is not shared between them. The rate meter
-now lives at module scope, which stops each editor within one copy from claiming a full budget, but
-two copies still hold a meter each and the account's limit can be exceeded by that factor.
-
-Both copies do work. Testing the deferral by hand with the budget lowered to two requests a minute
-produced deferral lines from both blob URLs, on independent schedules:
+Established by testing the deferral by hand with the budget lowered to two requests a minute. With
+two windows open the log carried `[languagetool] activated` twice in the same second from two
+`blob:` URLs, and deferral lines from both of them on independent schedules:
 
 ```
 11:47:59  d793afbe  deferring for 58s
@@ -29,19 +25,20 @@ produced deferral lines from both blob URLs, on independent schedules:
 11:50:02  77782605  deferring for 60s
 ```
 
-So each copy holds its own meter and spends its own budget, and the account saw roughly twice the
-configured rate. That settles the part that mattered: this is not a second copy sitting idle, and
-one copy plus a settings panel that never checks anything is ruled out.
+Closing one window and running it again gave one `activated` line, one `blob:` URL, and every
+deferral from it. So it is one copy per window, not one per editor and not a settings panel loading
+its own, and the copies are not duplicating each other's work: each window checks its own documents.
+The cost is the budget alone, multiplied by however many windows are open.
 
-What is still not known is why there are two, and whether it is avoidable. It may be one per window
-or one per editor host. It is also not known whether both are checking the same document, which
-would make it duplicated work as well as a doubled budget, or whether they are bound to different
-editors. Find that out before reaching for a shared channel, since it decides whether the fix is to
-share the meter or to stop loading twice.
+The meter is already at module scope, which is as far as this can be taken inside one copy. Going
+further means putting it somewhere every window can see, which for this host is the configuration
+bag or a `BroadcastChannel`, and both need the windows to agree on a single count rather than each
+keeping their own.
 
-If it does need solving, the meter has to live somewhere both copies can see, which for this host
-means the configuration bag or a `BroadcastChannel`. Neither is free, and both are worse than
-finding out the extension only needs loading once.
+Worth weighing before building that. The consequence of the overrun is bounded: the account's real
+limit is reached, the service answers 429, and the backoff added in #7 handles it. So two windows
+turn a limiter that avoids refusals into one that recovers from them, which is worse but not broken.
+A third window makes it worse again.
 
 ## A debounce that accounts for what is being sent
 

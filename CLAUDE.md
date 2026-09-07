@@ -203,8 +203,9 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
   one condition also covers the text moving under a chunk and the budget stopping the loop.
 - There is one meter for the extension, at module scope, not one per editor. `register` runs per
   editor and the budget belongs to the account, so a meter built inside it gives every open document
-  a full budget of its own and the limit is exceeded by however many are open. See the roadmap entry
-  on the extension being loaded more than once, which the same reasoning does not fully cover.
+  a full budget of its own and the limit is exceeded by however many are open. Module scope is as far
+  as this goes: the extension is loaded once per Nimbalyst window, so two windows still spend two
+  budgets against one account. The roadmap entry has the evidence and the reason that is left alone.
 - The meter holds the service's real figures rather than a cautious fraction of them, and reacts
   when the budget runs out instead of reserving headroom against it. A 429 is treated as the service
   knowing better than the meter: it backs off further on each consecutive refusal and honours
