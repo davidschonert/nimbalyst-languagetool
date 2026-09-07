@@ -190,8 +190,17 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
 
 **Rate limiting**
 
-- Only the cloud backend is metered. A self-hosted server is unmetered, so throttling it would cost
-  responsiveness for nothing.
+- Only the cloud backend is metered, and that includes the failure paths. A self-hosted server can
+  be given a `requestLimit` of its own and answer 429, so letting a local refusal reach the shared
+  meter would back off the cloud budget over something unrelated to it, and a local success would
+  clear a real cloud backoff. Every use of the meter asks `metered` first.
+- `Retry-After` is clamped where it is parsed, not where it is used. It is the only
+  server-controlled number that reaches a timer, and a delay past 2^31-1 milliseconds silently
+  becomes one millisecond, which turns a long backoff into a busy loop.
+- A block is cached only once every chunk carrying it has answered, counted rather than flagged. An
+  oversized block is split across chunks that all report its one node key, so a flag set by the
+  first would mark the whole block checked and the rest of it would never be looked at again. That
+  one condition also covers the text moving under a chunk and the budget stopping the loop.
 - There is one meter for the extension, at module scope, not one per editor. `register` runs per
   editor and the budget belongs to the account, so a meter built inside it gives every open document
   a full budget of its own and the limit is exceeded by however many are open. See the roadmap entry

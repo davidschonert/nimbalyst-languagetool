@@ -213,6 +213,12 @@ export const LanguageToolExtension = defineExtension({
       }
       if (token !== checkToken) return;
 
+      // Every use of the meter asks this, including the two in the catch. A
+      // self-hosted server can be given a requestLimit of its own and answer
+      // 429, and letting that reach the shared meter would back off the cloud
+      // budget for a refusal that had nothing to do with it.
+      const metered = options.backend === 'cloud';
+
       const shape = requestShape(options);
       if (shape !== cachedFor) {
         cache.clear();
@@ -264,7 +270,6 @@ export const LanguageToolExtension = defineExtension({
       heldDuringRun = byBlock;
 
       const replaced = new Set<number>();
-      const skipped = new Set<number>();
       /** Whether the service answered at all, which is not the same as replacing a block. */
       let anyAnswer = false;
       /** Set when the budget ran out, so the run is resumed rather than lost. */
@@ -283,11 +288,28 @@ export const LanguageToolExtension = defineExtension({
             if (stale.has(index)) padded.add(position);
           });
 
-          for (const chunk of chunkDocument(sending, chunkLimit(), padded)) {
+          const parts = chunkDocument(sending, chunkLimit(), padded);
+
+          // How many chunks carry each stale block. An oversized block is split
+          // across several, so answering one of them is not answering for the
+          // block, and caching on the first would mark the rest checked and
+          // clean without anything having looked at it.
+          const owed = new Map<number, number>();
+          for (const chunk of parts) {
+            const covers = new Set<number>();
+            for (const segment of chunk.segments) {
+              const index = blockOfNode.get(segment.nodeKey);
+              if (index !== undefined && stale.has(index)) covers.add(index);
+            }
+            for (const index of covers) owed.set(index, (owed.get(index) ?? 0) + 1);
+          }
+          const paid = new Map<number, number>();
+
+          for (const chunk of parts) {
             // The service counts the text it sees, which is the prose plus the
             // markup substitutes, so that is what the meter is charged.
-            const cost = options.backend === 'cloud' ? chunk.textLength : 0;
-            const wait = options.backend === 'cloud' ? meter.waitFor(cost) : 0;
+            const cost = metered ? chunk.textLength : 0;
+            const wait = metered ? meter.waitFor(cost) : 0;
 
             if (wait > 0) {
               // Deferred, not dropped. Everything not yet answered stays stale,
@@ -301,11 +323,11 @@ export const LanguageToolExtension = defineExtension({
               break;
             }
 
-            if (cost > 0) meter.record(cost);
+            if (metered) meter.record(cost);
             const raw = await check(chunk, options, controller.signal);
             if (token !== checkToken) return;
             anyAnswer = true;
-            meter.accepted();
+            if (metered) meter.accepted();
 
             // Which of this chunk's blocks the answer is actually for. The rest
             // of the run went along for sentence context, and their own results
@@ -320,18 +342,17 @@ export const LanguageToolExtension = defineExtension({
 
             // The text under this chunk changed while it was in flight, so its
             // offsets have moved and the answer is not about this document any
-            // more. Leave those blocks stale for the next check rather than
-            // abandoning every chunk still to come.
-            if (moved) {
-              for (const index of answered) skipped.add(index);
-              continue;
-            }
+            // more. Skipping it leaves its blocks a chunk short of complete, so
+            // they stay stale for the next check without anything else having
+            // to record that, and the chunks still to come are unaffected.
+            if (moved) continue;
 
             for (const index of answered) {
               if (replaced.has(index)) continue;
               replaced.add(index);
               byBlock.set(index, []);
             }
+            for (const index of answered) paid.set(index, (paid.get(index) ?? 0) + 1);
             for (const anchor of anchorMatches(chunk, raw)) {
               const index = blockOfNode.get(anchor.nodeKey);
               if (index === undefined || !answered.has(index)) continue;
@@ -342,14 +363,15 @@ export const LanguageToolExtension = defineExtension({
             layer.setMatches(matches);
           }
 
-          // Every chunk covering this run has answered, so its blocks are
-          // settled and can be cached. Caching per chunk would not be safe,
-          // since an oversized block is split across several of them and the
-          // first would store half an answer if a later one failed. A block the
-          // budget stopped this run from reaching was never asked about, so
-          // `replaced` is what separates an empty answer from no answer.
+          // A block is cached only once every chunk carrying it has answered.
+          // That is what separates a complete answer from a partial one, and it
+          // is the only condition that holds for all three ways a chunk can go
+          // unanswered: the text moved under it, the budget stopped the loop
+          // before it, or a later one threw. Counting rather than flagging is
+          // what makes an oversized block, which is split across several chunks
+          // that all carry its one node key, come out right.
           for (const index of run) {
-            if (!stale.has(index) || skipped.has(index) || !replaced.has(index)) continue;
+            if (!stale.has(index) || paid.get(index) !== owed.get(index)) continue;
             cache.set(plan.fingerprints[index]!, byBlock.get(index) ?? []);
           }
 
@@ -372,7 +394,7 @@ export const LanguageToolExtension = defineExtension({
 
         // The service knows better than the meter does. Back off, and come back
         // rather than waiting for the user to type something.
-        if (error instanceof CheckError && error.kind === 'rate') {
+        if (metered && error instanceof CheckError && error.kind === 'rate') {
           meter.refuse(error.retryAfterMs);
           const wait = meter.waitFor(0);
           if (warnOnRateLimit()) {

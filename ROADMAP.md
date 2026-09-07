@@ -26,6 +26,19 @@ If it does need solving, the meter has to live somewhere both copies can see, wh
 means the configuration bag or a `BroadcastChannel`. Neither is free, and both are worse than
 finding out the extension only needs loading once.
 
+## A debounce that accounts for what is being sent
+
+Left behind when the rest of the rate limiting entry was implemented, and nearly lost with it.
+
+`CHECK_DEBOUNCE_MS` in `CheckerExtension.ts` is still one fixed value per backend, 400ms local and
+2500ms cloud. It is too slow for a Premium account and too fast for a document that was just pasted
+in.
+
+The meter answers whether there is room to send right now. It does not answer how long to wait
+before asking, which is what the debounce is for, and a single number cannot account for how much a
+given check is about to send. The two compose: the debounce decides when to look, and the meter
+decides whether to go.
+
 ## Clear the underline when a correction is applied
 
 Found while using the extension. Click a replacement in the card and the word stays underlined until
