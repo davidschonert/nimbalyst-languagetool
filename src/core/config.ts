@@ -43,6 +43,7 @@ export const KEYS = {
   dictionary: 'languagetool.dictionary',
   dictionaryEnabled: 'languagetool.dictionaryEnabled',
   dictionaryPushToCloud: 'languagetool.dictionaryPushToCloud',
+  warnOnRateLimit: 'languagetool.warnOnRateLimit',
 } as const;
 
 export const DEFAULTS = {
@@ -128,6 +129,19 @@ export const CHUNK_LIMIT: Record<Backend, number> = {
 
 export function chunkLimit(): number {
   return CHUNK_LIMIT[backend()];
+}
+
+/**
+ * Say something when the rate limiter defers a check, instead of deferring it
+ * silently.
+ *
+ * Off by default, because a deferred check is the limiter working rather than
+ * anything going wrong, and it corrects itself within the minute. It goes to
+ * the console rather than to the editor: it exists to make the limiter legible
+ * while testing it, not to interrupt writing.
+ */
+export function warnOnRateLimit(): boolean {
+  return readBoolean(KEYS.warnOnRateLimit);
 }
 
 /**

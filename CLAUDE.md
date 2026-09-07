@@ -31,7 +31,7 @@ Every feature sits somewhere on this line. Know which stage you are in before ch
 Lexical node tree
   └─ core/annotate.ts   buildDocumentBlocks()    → DocumentBlock[]
        └─ core/incremental.ts  planCheck()       → only the blocks that changed
-            └─ core/chunk.ts  chunkDocument()    → AnnotatedDocument[]  (one per request)
+            └─ core/chunk.ts  chunkDocument()    → DocumentBlock[]  (one per request)
               └─ core/client.ts  check()         → POST /v2/check  → RawMatch[]
                  └─ core/matches.ts  anchorMatches() → AnchoredMatch[]  (nodeKey + in-node offset)
                       └─ ui/UnderlineLayer.ts    → absolutely positioned squiggles
@@ -50,6 +50,7 @@ the cloud token and nothing else.
 | `src/core/annotate.ts`         | Lexical tree → blocks, blocks → AnnotatedText, and the offset mapping back.  |
 | `src/core/chunk.ts`            | Blocks → request-sized chunks. The split rule and the size budget.          |
 | `src/core/incremental.ts`      | Which blocks need re-checking, and the cache of what each one said.         |
+| `src/core/budget.ts`           | What has been sent lately, and whether there is room for more. Cloud only.  |
 | `src/core/client.ts`           | The one HTTP call. Two backends, one request shape. `CheckError` taxonomy.   |
 | `src/core/matches.ts`          | `RawMatch` → `AnchoredMatch`, and carrying an anchor across an edit.         |
 | `src/core/config.ts`           | Typed reads over the host's config bag. Defaults live here, not in manifest. |
@@ -186,6 +187,33 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
   only into Nimbalyst's encrypted secret store. `config.test.ts` asserts that `checkOptions()`
   carries no `apiKey`.
 - Cloud credentials are sent both or neither. One alone makes the service reject the request.
+
+**Rate limiting**
+
+- Only the cloud backend is metered, and that includes the failure paths. A self-hosted server can
+  be given a `requestLimit` of its own and answer 429, so letting a local refusal reach the shared
+  meter would back off the cloud budget over something unrelated to it, and a local success would
+  clear a real cloud backoff. Every use of the meter asks `metered` first.
+- `Retry-After` is clamped where it is parsed, not where it is used. It is the only
+  server-controlled number that reaches a timer, and a delay past 2^31-1 milliseconds silently
+  becomes one millisecond, which turns a long backoff into a busy loop.
+- A block is cached only once every chunk carrying it has answered, counted rather than flagged. An
+  oversized block is split across chunks that all report its one node key, so a flag set by the
+  first would mark the whole block checked and the rest of it would never be looked at again. That
+  one condition also covers the text moving under a chunk and the budget stopping the loop.
+- There is one meter for the extension, at module scope, not one per editor. `register` runs per
+  editor and the budget belongs to the account, so a meter built inside it gives every open document
+  a full budget of its own and the limit is exceeded by however many are open. Module scope is as far
+  as this goes: the extension is loaded once per Nimbalyst window, so two windows still spend two
+  budgets against one account. The roadmap entry has the evidence and the reason that is left alone.
+- The meter holds the service's real figures rather than a cautious fraction of them, and reacts
+  when the budget runs out instead of reserving headroom against it. A 429 is treated as the service
+  knowing better than the meter: it backs off further on each consecutive refusal and honours
+  `Retry-After` when one is sent.
+- Running out of budget defers a check, it does not drop one. The blocks that were not reached stay
+  stale, so the retry continues from there rather than starting again at the top of the document.
+  Nothing is said about it unless `languagetool.warnOnRateLimit` is on, and then only in the
+  console: a deferred check is the limiter working, and it corrects itself within the minute.
 
 **Host workarounds, which should not be cleaned up**
 

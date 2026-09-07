@@ -7,6 +7,52 @@ repeat this list, because two lists drift apart.
 Each entry carries the constraint behind it rather than only a title. The numbers and the reasons
 are the part that is expensive to recover later.
 
+## One rate meter across every Nimbalyst window
+
+The extension is loaded once per window, and each copy holds its own rate meter, so two windows
+spend two budgets against one LanguageTool account.
+
+Established by testing the deferral by hand with the budget lowered to two requests a minute. With
+two windows open the log carried `[languagetool] activated` twice in the same second from two
+`blob:` URLs, and deferral lines from both of them on independent schedules:
+
+```
+11:47:59  d793afbe  deferring for 58s
+11:48:02  77782605  deferring for 58s
+11:48:58  d793afbe  deferring for 1s
+11:49:01  77782605  deferring for 59s
+11:49:01  d793afbe  deferring for 56s
+11:50:02  77782605  deferring for 60s
+```
+
+Closing one window and running it again gave one `activated` line, one `blob:` URL, and every
+deferral from it. So it is one copy per window, not one per editor and not a settings panel loading
+its own, and the copies are not duplicating each other's work: each window checks its own documents.
+The cost is the budget alone, multiplied by however many windows are open.
+
+The meter is already at module scope, which is as far as this can be taken inside one copy. Going
+further means putting it somewhere every window can see, which for this host is the configuration
+bag or a `BroadcastChannel`, and both need the windows to agree on a single count rather than each
+keeping their own.
+
+Worth weighing before building that. The consequence of the overrun is bounded: the account's real
+limit is reached, the service answers 429, and the backoff added in #7 handles it. So two windows
+turn a limiter that avoids refusals into one that recovers from them, which is worse but not broken.
+A third window makes it worse again.
+
+## A debounce that accounts for what is being sent
+
+Left behind when the rest of the rate limiting entry was implemented, and nearly lost with it.
+
+`CHECK_DEBOUNCE_MS` in `CheckerExtension.ts` is still one fixed value per backend, 400ms local and
+2500ms cloud. It is too slow for a Premium account and too fast for a document that was just pasted
+in.
+
+The meter answers whether there is room to send right now. It does not answer how long to wait
+before asking, which is what the debounce is for, and a single number cannot account for how much a
+given check is about to send. The two compose: the debounce decides when to look, and the meter
+decides whether to go.
+
 ## Clear the underline when a correction is applied
 
 Found while using the extension. Click a replacement in the card and the word stays underlined until
@@ -43,20 +89,6 @@ so that the update listener's `carryOver` runs on the already-filtered list. Fil
 would be overwritten by whatever the listener assigned.
 
 Left unfixed for now on purpose, so it can go in with whatever else the chunking work turns up.
-
-## Rate limiting
-
-The service allows 20 requests and 75,000 characters per minute on the free tier, and 80 and
-300,000 on Premium. Characters per minute used to bind first, because every check sent the whole
-document: a 20,000 character document allowed a check every 16 seconds on free and every 4 seconds
-on Premium.
-
-Chunking changes that. A check of a long document is now several requests in a row rather than one,
-so requests per minute is worth counting again, and the figure to rate limit against is the chunk
-rather than the file.
-
-The cloud debounce is still one fixed value, which is both too slow for Premium and too fast for
-free. A rate limit that accounts for how much is actually being sent would replace it.
 
 ## A visible indicator of the active backend
 

@@ -333,3 +333,18 @@ describe('keeping a padded block with its neighbours', () => {
     );
   });
 });
+
+describe('what an oversized block does to node keys', () => {
+  it('gives every part the same node key, since they came from one text node', () => {
+    // The property the caching in CheckerExtension has to account for: an
+    // oversized block becomes several chunks that all report the same node, so
+    // one of them answering is not the block being answered for.
+    const { blocks } = walk(() => paragraph('One two three. '.repeat(6).trimEnd()));
+
+    const chunks = chunkDocument(blocks, 40);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    const keys = new Set(chunks.flatMap((chunk) => chunk.segments.map((s) => s.nodeKey)));
+    expect(keys.size).toBe(1);
+  });
+});

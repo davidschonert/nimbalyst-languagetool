@@ -54,6 +54,8 @@ export type CheckErrorKind =
   | 'offline'
   /** Credentials missing or rejected. */
   | 'auth'
+  /** Too much, too fast. The one failure that says to send less rather than to stop. */
+  | 'rate'
   /** The server answered, but not with success. */
   | 'http'
   /** The server answered with something that is not a check result. */
@@ -62,13 +64,47 @@ export type CheckErrorKind =
 export class CheckError extends Error {
   readonly kind: CheckErrorKind;
   readonly status?: number;
+  /** From `Retry-After` on a refusal, when the service sent one. */
+  readonly retryAfterMs?: number;
 
-  constructor(kind: CheckErrorKind, message: string, status?: number) {
+  constructor(kind: CheckErrorKind, message: string, status?: number, retryAfterMs?: number) {
     super(message);
     this.name = 'CheckError';
     this.kind = kind;
     if (status !== undefined) this.status = status;
+    if (retryAfterMs !== undefined) this.retryAfterMs = retryAfterMs;
   }
+}
+
+/**
+ * No wait this long is a real instruction. An hour is already far longer than a
+ * check should ever be held, so anything beyond it is a proxy with a silly
+ * number in it or a clock that disagrees with the server's by more than an
+ * hour, and neither is a reason to stop checking for a year.
+ *
+ * Clamping here rather than at the timer is deliberate: this is the only way a
+ * server-controlled number reaches the meter, so bounding it at the parse site
+ * keeps `blockedUntil` bounded too, and nothing downstream has to know that a
+ * `setTimeout` delay above 2^31-1 milliseconds silently becomes one.
+ */
+const MAX_RETRY_AFTER_MS = 3_600_000;
+
+/**
+ * `Retry-After` is either a whole number of seconds or an HTTP date, and the
+ * spec allows both on the same header. Anything unparseable is treated as
+ * absent rather than as zero, so a malformed header cannot turn a backoff off.
+ */
+export function retryAfterMs(header: string | null): number | undefined {
+  if (!header) return undefined;
+
+  const seconds = Number(header.trim());
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+  }
+
+  const when = Date.parse(header);
+  if (Number.isNaN(when)) return undefined;
+  return Math.min(Math.max(0, when - Date.now()), MAX_RETRY_AFTER_MS);
 }
 
 const CHECK_PATH = '/v2/check';
@@ -211,8 +247,17 @@ export async function check(
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
     const kind: CheckErrorKind =
-      response.status === 401 || response.status === 403 ? 'auth' : 'http';
-    throw new CheckError(kind, detail.slice(0, 200) || response.statusText, response.status);
+      response.status === 401 || response.status === 403
+        ? 'auth'
+        : response.status === 429
+          ? 'rate'
+          : 'http';
+    throw new CheckError(
+      kind,
+      detail.slice(0, 200) || response.statusText,
+      response.status,
+      retryAfterMs(response.headers.get('Retry-After')),
+    );
   }
 
   let payload: unknown;

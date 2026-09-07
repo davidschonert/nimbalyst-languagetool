@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AnnotatedDocument } from './annotate';
-import { addWordToAccount, check, CheckError, type CheckOptions } from './client';
+import { addWordToAccount, check, CheckError, retryAfterMs, type CheckOptions } from './client';
 
 const doc: AnnotatedDocument = {
   annotation: [{ text: 'The server are running.' }],
@@ -14,13 +14,21 @@ const local: CheckOptions = {
   language: 'en-US',
 };
 
-function respondWith(payload: unknown, init: { ok?: boolean; status?: number } = {}) {
+function respondWith(
+  payload: unknown,
+  init: { ok?: boolean; status?: number; headers?: Record<string, string> } = {},
+) {
+  // A real Response always carries headers, and the client reads Retry-After
+  // off a refusal, so the fake carries them too rather than being a shape the
+  // production code has to defend against.
+  const headers = new Headers(init.headers ?? {});
   // The parameters are declared so the recorded calls stay typed, which is
   // what lets sentBody read the request body without casting the tuple.
   const fetchMock = vi.fn(async (_input: string, _init: RequestInit) => ({
     ok: init.ok ?? true,
     status: init.status ?? 200,
     statusText: 'Error',
+    headers,
     json: async () => payload,
     text: async () => (typeof payload === 'string' ? payload : JSON.stringify(payload)),
   }));
@@ -221,5 +229,41 @@ describe('adding a word to the account', () => {
     const fetchMock = respondWith({ added: true });
     await addWordToAccount('Flosum', account);
     expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+});
+
+describe('retryAfterMs', () => {
+  it('reads the seconds form', () => {
+    expect(retryAfterMs('120')).toBe(120_000);
+  });
+
+  it('reads the HTTP-date form', () => {
+    const when = new Date(Date.now() + 30_000).toUTCString();
+    // Whole seconds either way, so allow the rounding.
+    expect(retryAfterMs(when)).toBeGreaterThan(28_000);
+    expect(retryAfterMs(when)).toBeLessThanOrEqual(31_000);
+  });
+
+  it('treats an unparseable header as absent rather than as zero', () => {
+    // Zero would turn the backoff off, which is the opposite of what a
+    // malformed Retry-After should do.
+    expect(retryAfterMs('soon please')).toBeUndefined();
+    expect(retryAfterMs(null)).toBeUndefined();
+  });
+
+  it('clamps a silly number of seconds', () => {
+    // A delay past 2^31-1 milliseconds silently becomes 1ms at setTimeout, so
+    // an unclamped value here turns a long backoff into a busy loop.
+    expect(retryAfterMs('99999999')).toBe(3_600_000);
+  });
+
+  it('clamps a date a badly set clock puts a year out', () => {
+    const nextYear = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString();
+    expect(retryAfterMs(nextYear)).toBe(3_600_000);
+  });
+
+  it('never reports a date in the past as a wait', () => {
+    const lastYear = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toUTCString();
+    expect(retryAfterMs(lastYear)).toBe(0);
   });
 });
