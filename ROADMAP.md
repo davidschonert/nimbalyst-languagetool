@@ -17,10 +17,27 @@ Two copies are two module graphs, so module-scope state is not shared between th
 now lives at module scope, which stops each editor within one copy from claiming a full budget, but
 two copies still hold a meter each and the account's limit can be exceeded by that factor.
 
-What is not known yet is why there are two, and whether it is avoidable. It may be one per window,
-one per editor host, or the settings panel loading its own copy. That is the thing to find out
-first, because it decides whether this is worth solving at all: one copy per window is a real
-problem, and one copy plus a panel that never checks anything is not.
+Both copies do work. Testing the deferral by hand with the budget lowered to two requests a minute
+produced deferral lines from both blob URLs, on independent schedules:
+
+```
+11:47:59  d793afbe  deferring for 58s
+11:48:02  77782605  deferring for 58s
+11:48:58  d793afbe  deferring for 1s
+11:49:01  77782605  deferring for 59s
+11:49:01  d793afbe  deferring for 56s
+11:50:02  77782605  deferring for 60s
+```
+
+So each copy holds its own meter and spends its own budget, and the account saw roughly twice the
+configured rate. That settles the part that mattered: this is not a second copy sitting idle, and
+one copy plus a settings panel that never checks anything is ruled out.
+
+What is still not known is why there are two, and whether it is avoidable. It may be one per window
+or one per editor host. It is also not known whether both are checking the same document, which
+would make it duplicated work as well as a doubled budget, or whether they are bound to different
+editors. Find that out before reaching for a shared channel, since it decides whether the fix is to
+share the meter or to stop loading twice.
 
 If it does need solving, the meter has to live somewhere both copies can see, which for this host
 means the configuration bag or a `BroadcastChannel`. Neither is free, and both are worse than
