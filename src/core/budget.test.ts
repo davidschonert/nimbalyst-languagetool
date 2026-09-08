@@ -130,3 +130,84 @@ describe('the cloud budget', () => {
     expect(CLOUD_BUDGET).toEqual({ requests: 80, characters: 300_000, windowMs: 60_000 });
   });
 });
+
+describe('the pressure reading', () => {
+  it('is nothing on an empty meter and everything on a spent one', () => {
+    const clock = fakeClock();
+    const meter = new RateMeter(SMALL, clock.now);
+
+    expect(meter.pressure()).toBe(0);
+
+    for (let i = 0; i < 3; i += 1) meter.record(1);
+    expect(meter.pressure()).toBe(1);
+  });
+
+  it('reads whichever limit is closer to binding', () => {
+    const clock = fakeClock();
+    const meter = new RateMeter(SMALL, clock.now);
+
+    // One request of the three is a third of that allowance, and 90 of the 100
+    // characters is nearly all of the other one. Read past the short horizon,
+    // so this is the minute's own figure and the higher of the two wins.
+    meter.record(90);
+    clock.advance(20_000);
+
+    expect(meter.pressure()).toBeCloseTo(0.9, 5);
+  });
+
+  it('forgets a window that has aged out', () => {
+    const clock = fakeClock();
+    const meter = new RateMeter(SMALL, clock.now);
+
+    meter.record(90);
+    clock.advance(SMALL.windowMs + 1);
+
+    expect(meter.pressure()).toBe(0);
+  });
+
+  it('sees a burst before the minute is up', () => {
+    const clock = fakeClock();
+    const meter = new RateMeter(CLOUD_BUDGET, clock.now);
+
+    // Twenty requests in five seconds is a quarter of the minute's allowance
+    // spent in a twelfth of it. Over the minute alone that reads as a quarter,
+    // and the short horizon is what makes it read as the sprint it is.
+    for (let i = 0; i < 20; i += 1) {
+      meter.record(100);
+      clock.advance(250);
+    }
+
+    expect(meter.pressure()).toBeGreaterThan(0.9);
+  });
+
+  it('does not read an ordinary document check as a sprint', () => {
+    const clock = fakeClock();
+    const meter = new RateMeter(CLOUD_BUDGET, clock.now);
+
+    // Four chunks of a few thousand characters each, sent back to back the way
+    // a run sends them. That is what opening a document costs, and it should
+    // not leave the next edit paced as though the budget were in trouble.
+    for (let i = 0; i < 4; i += 1) {
+      meter.record(5_000);
+      clock.advance(400);
+    }
+
+    expect(meter.pressure()).toBeLessThan(0.4);
+  });
+
+  it('does read a very large document as one, because it is', () => {
+    const clock = fakeClock();
+    const meter = new RateMeter(CLOUD_BUDGET, clock.now);
+
+    // 80,000 characters inside two seconds is above the 75,000 the account
+    // allows in any quarter minute, so the pressure is real rather than a false
+    // alarm, and the pacing is right to hold the next check back until it
+    // decays.
+    for (let i = 0; i < 4; i += 1) {
+      meter.record(20_000);
+      clock.advance(400);
+    }
+
+    expect(meter.pressure()).toBe(1);
+  });
+});

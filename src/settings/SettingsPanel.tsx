@@ -393,11 +393,12 @@ export function LanguageToolSettings(_props: SettingsPanelProps) {
             }}
           />
           <span>
-            <span className="lt-field__label">Log deferred checks</span>
+            <span className="lt-field__label">Log check timing</span>
             <span className="lt-field__hint">
-              Writes a line to the developer console whenever the cloud rate limit defers a check.
-              Off by default, since a deferred check corrects itself within the minute. For working
-              out why checking feels slow.
+              Writes a line to the developer console for every check, saying how long it waited and
+              what set that wait, and whenever the cloud rate limit defers one. Off by default,
+              since a deferred check corrects itself within the minute. For working out why checking
+              feels slow.
             </span>
           </span>
         </label>

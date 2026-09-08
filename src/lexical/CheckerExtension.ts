@@ -12,39 +12,21 @@
  * repositioning and re-checking do not share a debounce.
  */
 
-import { $getNodeByKey, $isTextNode, defineExtension, type LexicalEditor } from 'lexical';
+import { $getNodeByKey, $getRoot, $isTextNode, defineExtension, type LexicalEditor } from 'lexical';
 
 import { buildDocumentBlocks, type DocumentBlock } from '../core/annotate';
 import { CLOUD_BUDGET, RateMeter } from '../core/budget';
 import { chunkDocument } from '../core/chunk';
-import { check, CheckError, type Backend, type CheckErrorKind, type CheckOptions } from '../core/client';
+import { check, CheckError, type CheckErrorKind, type CheckOptions } from '../core/client';
 import { backend, checkOptions, chunkLimit, triggerMode, warnOnRateLimit } from '../core/config';
 import { addWord, dictionaryEnabled, isIgnored } from '../core/dictionary';
 import { planCheck, prune, type BlockCache } from '../core/incremental';
 import { anchorMatches, carryOver } from '../core/matches';
+import { paceCheck, type Pace, type PaceInput } from '../core/pace';
 import { readApiKey } from '../core/secrets';
 import type { AnchoredMatch } from '../core/types';
 import { MatchPopover } from '../ui/MatchPopover';
 import { UnderlineLayer, type UnderlineHit } from '../ui/UnderlineLayer';
-
-/**
- * Long enough that a pause in typing triggers a check, not a keystroke.
- *
- * A local server is unmetered and answers a full document in roughly half a
- * second, so it can afford to feel responsive.
- *
- * The cloud figure was chosen when cloud was assumed to be a rare final pass,
- * and it is wrong for a backend used continuously: two and a half seconds is a
- * wait you feel on every pause. Replacing it is the roadmap's `A debounce that
- * accounts for what is being sent`, and the answer is not a smaller constant.
- *
- * Superseded checks are aborted either way, so a short wait costs canceled
- * requests rather than duplicated work.
- */
-const CHECK_DEBOUNCE_MS: Record<Backend, number> = {
-  local: 400,
-  cloud: 2500,
-};
 
 /** Grace period so moving from an underline onto the card does not close it. */
 const HOVER_CLOSE_MS = 140;
@@ -81,6 +63,40 @@ export const LanguageToolExtension = defineExtension({
 
     let checkTimer: ReturnType<typeof setTimeout> | undefined;
     let closeTimer: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * The current text length of every node edited since the last check began,
+     * which is what `paceCheck` reads to tell one typed word from a pasted
+     * chapter.
+     *
+     * Keyed by node rather than summed as it arrives, so a paragraph typed into
+     * fifty times counts once at its present size instead of fifty times at the
+     * size it had each time. It is cleared where a run starts, since that run
+     * covers everything stale at that moment, and anything edited afterwards is
+     * added again by the update listener.
+     */
+    const pendingNodes = new Map<string, number>();
+    const pendingChars = (): number => {
+      let total = 0;
+      for (const length of pendingNodes.values()) total += length;
+      return total;
+    };
+
+    /**
+     * What the next check will send, which before the first one is everything.
+     *
+     * The whole document is read rather than assumed to be large, so opening a
+     * short note is checked as the small send it is instead of waiting out the
+     * settle a pasted chapter deserves. It costs one walk of the tree, and only
+     * until the first check has run.
+     */
+    const sendSize = (): number => {
+      if (hasChecked) return pendingChars();
+      return editor.getEditorState().read(() => $getRoot().getTextContentSize());
+    };
+
+    /** When the open run started, so a check that would supersede it can wait it out. */
+    let runStartedAt: number | undefined;
 
     // Supersede rather than queue: only the newest check matters.
     let checkToken = 0;
@@ -195,6 +211,11 @@ export const LanguageToolExtension = defineExtension({
       inFlight?.abort();
       const controller = new AbortController();
       inFlight = controller;
+      runStartedAt = Date.now();
+      // This run plans against the tree as it is now, so everything edited up to
+      // here is about to be covered. Cleared synchronously, before the first
+      // await, so an edit made during the run is counted for the next one.
+      pendingNodes.clear();
 
       const dirtied = new Set<string>();
       dirtiedDuringRun = dirtied;
@@ -427,6 +448,9 @@ export const LanguageToolExtension = defineExtension({
           console.warn('[languagetool] check failed:', (error as Error).message);
         }
       } finally {
+        // Only if this run is still the current one. A superseded run finishing
+        // late must not clear the marker its successor has already set.
+        if (token === checkToken) runStartedAt = undefined;
         if (dirtiedDuringRun === dirtied) dirtiedDuringRun = undefined;
         if (heldDuringRun === byBlock) heldDuringRun = undefined;
         // Outside the try, so a failure partway through still leaves the cache
@@ -437,21 +461,55 @@ export const LanguageToolExtension = defineExtension({
     };
 
     /**
+     * What the wait should be for the check that is pending now.
+     *
+     * Everything the pacing needs is here rather than in `pace.ts`: the meter is
+     * only ever consulted for cloud, on the same rule as every other use of it,
+     * since a self-hosted server has no budget to spend and reading one for it
+     * would pace the local backend by the cloud account's minute.
+     */
+    const paceFor = (overrides: Partial<PaceInput> = {}): Pace => {
+      const selected = backend();
+      const metered = selected === 'cloud';
+      const chars = sendSize();
+      return paceCheck({
+        backend: selected,
+        pendingChars: chars,
+        pressure: metered ? meter.pressure() : 0,
+        budgetWaitMs: metered ? meter.waitFor(chars) : 0,
+        inFlightForMs: runStartedAt === undefined ? undefined : Date.now() - runStartedAt,
+        ...overrides,
+      });
+    };
+
+    /** One line per check rather than per keystroke, and only when asked for. */
+    const start = (pace: Pace): void => {
+      if (warnOnRateLimit()) {
+        console.info(`[languagetool] checking after ${pace.delayMs}ms (${pace.reason})`);
+      }
+      hasChecked = true;
+      void runCheck();
+    };
+
+    /**
      * Come back when the budget allows it, rather than on the next keystroke.
      * The blocks this run did not reach are still stale, so the next run picks
      * up where this one stopped instead of starting again at the top.
+     *
+     * The budget's own wait goes in as the hard block it is, and the pacing is
+     * free to hold the retry back further. It is not held back for the run that
+     * is asking for it: that run is finishing, not being superseded.
      */
     const scheduleRetry = (delayMs: number): void => {
       clearTimeout(checkTimer);
-      checkTimer = setTimeout(() => void runCheck(), Math.max(delayMs, CHECK_DEBOUNCE_MS[backend()]));
+      const pace = paceFor({ budgetWaitMs: delayMs, inFlightForMs: undefined });
+      checkTimer = setTimeout(() => start(pace), pace.delayMs);
     };
 
     const scheduleCheck = (): void => {
       clearTimeout(checkTimer);
-      checkTimer = setTimeout(() => {
-        hasChecked = true;
-        void runCheck();
-      }, CHECK_DEBOUNCE_MS[backend()]);
+      const pace = paceFor();
+      checkTimer = setTimeout(() => start(pace), pace.delayMs);
     };
 
     const openFor = (hit: UnderlineHit): void => {
@@ -539,6 +597,17 @@ export const LanguageToolExtension = defineExtension({
         // is still in flight. Everything outside the node only moved on screen,
         // so it repaints immediately.
         if (dirtyLeaves.size > 0) {
+          // What the next check is going to be asked to send, which is what
+          // decides how long to wait before asking. Read from the new state, so
+          // a node that was deleted contributes nothing rather than the length
+          // it used to have.
+          editorState.read(() => {
+            for (const key of dirtyLeaves) {
+              const node = $getNodeByKey(key);
+              pendingNodes.set(key, $isTextNode(node) ? node.getTextContentSize() : 0);
+            }
+          });
+
           // A check in flight needs to know which nodes moved under it, so it
           // can discard the chunks that covered them and keep the rest.
           if (dirtiedDuringRun) {

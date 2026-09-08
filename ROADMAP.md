@@ -42,21 +42,24 @@ A third window makes it worse again.
 
 ## A debounce that accounts for what is being sent
 
-Left behind when the rest of the rate limiting entry was implemented, and nearly lost with it.
+Built. `core/pace.ts` holds it, and what remains is what was deliberately left out.
 
-`CHECK_DEBOUNCE_MS` in `CheckerExtension.ts` is still one fixed value per backend, 400ms local and
-2500ms cloud. It is too slow for a Premium account and too fast for a document that was just pasted
-in.
+The wait is no longer a constant. It is the longest of a floor, a ramp on how much text is stale, a
+ramp on how much of the minute's budget is spent, and a grace that stops a check aborting the
+request its predecessor already paid for, with the meter's own wait on top as a hard block. On cloud
+that is 350ms after an ordinary edit against the 2500ms it used to be, and still 2500ms for a
+document pasted in, which is the case the old constant was right for.
 
-The cloud figure matters more than it looks. It was chosen on the assumption that cloud was a rare
-final pass, where a long wait costs nothing. Cloud is in fact the backend in daily use, because the
-premium and AI rules find a good deal more, so that two and a half seconds is felt on every pause of
-every document. It is the most visible thing left on this list.
+Two things were left:
 
-The meter answers whether there is room to send right now. It does not answer how long to wait
-before asking, which is what the debounce is for, and a single number cannot account for how much a
-given check is about to send. The two compose: the debounce decides when to look, and the meter
-decides whether to go.
+- The pacing reads only this window's meter, so the ramp cannot see what a second Nimbalyst window
+  is spending. It leaves headroom instead: steady typing settles near 50 requests a minute against
+  an allowance of 80, and peaks at 54. That is a deliberate under-use of the budget, and it stops
+  being necessary once the entry above lands.
+- `pendingChars` is estimated from the nodes edited since the last check rather than from
+  `planCheck`, because the delay has to be chosen before the block walk runs. It undercounts, since
+  a stale block is sent with its neighbours. Making it exact means running the walk on every
+  keystroke, which is the cost the estimate exists to avoid, so this is not obviously worth fixing.
 
 ## Clear the underline when a correction is applied
 

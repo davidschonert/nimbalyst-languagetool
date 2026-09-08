@@ -66,6 +66,9 @@ pipelinePrewarming=true
       checked, and a long one underlines from the top down instead of all at once
 - [x] Incremental checking, so editing one paragraph re-checks that paragraph rather than the file
 - [x] Rate limiting on the cloud backend, which defers a check rather than having one rejected
+- [x] A debounce that paces itself on how much is about to be sent and how much of the minute's
+      budget is left, so an ordinary edit is checked in a fraction of a second and a pasted document
+      still gets a settle
 
 Everything still missing is in [ROADMAP.md](ROADMAP.md), with the constraint behind each item.
 

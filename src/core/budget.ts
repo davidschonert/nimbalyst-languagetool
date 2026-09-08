@@ -39,6 +39,13 @@ export const CLOUD_BUDGET: Budget = {
   windowMs: 60_000,
 };
 
+/**
+ * The short horizon `pressure` also measures, as a fraction of the window. A
+ * quarter of a minute is long enough that one chunked document does not read as
+ * a sprint, and short enough to catch one before it has spent the window.
+ */
+const PRESSURE_PROBE_SHARE = 0.25;
+
 /** Doubling per consecutive 429, so a service that keeps refusing is left alone. */
 const BACKOFF_STEP_MS = 5_000;
 const BACKOFF_CAP_MS = 120_000;
@@ -100,6 +107,60 @@ export class RateMeter {
   /** Room right now for a request of this size? */
   allows(characters: number): boolean {
     return this.waitFor(characters) === 0;
+  }
+
+  /** How much of the allowance for `horizonMs` has been spent inside it. */
+  private spentOver(now: number, horizonMs: number): number {
+    const from = now - horizonMs;
+    let requests = 0;
+    let characters = 0;
+    for (const entry of this.sent) {
+      if (entry.at <= from) continue;
+      requests += 1;
+      characters += entry.characters;
+    }
+
+    const share = horizonMs / this.budget.windowMs;
+    return Math.max(
+      requests / (this.budget.requests * share),
+      characters / (this.budget.characters * share),
+    );
+  }
+
+  /**
+   * How hard the budget is being spent, from 0 to 1, on whichever limit is
+   * closer to binding.
+   *
+   * `waitFor` only answers at the cliff: it is zero until the budget is gone and
+   * then it is a wait. That is the right answer for whether to send and the
+   * wrong one for how eagerly to ask, which wants to slow down before the cliff
+   * rather than at it. `paceCheck` reads this to ramp the debounce as the window
+   * fills, so a busy minute costs a slower check rather than a deferred one.
+   *
+   * Asked over two horizons and answered with the worse of them. The window's
+   * own minute is the figure that matters, but on a cold meter it is thirty
+   * seconds behind: a burst starting from an empty window is half over before
+   * the fraction has risen enough to slow it down, and measuring it showed 68
+   * requests in the first minute against a steady state of 50. The short
+   * horizon is the same question over a quarter of the window, scaled to a
+   * quarter of the allowance, so it reacts within seconds and settles on the
+   * same answer. Nothing about the steady state changes; only how long it takes
+   * to arrive.
+   *
+   * It reports this Nimbalyst window's spending, which is all the meter has ever
+   * known. Another window is spending the same account against its own copy, so
+   * this is a floor on what the account has really used, and the pacing leaves
+   * headroom rather than aiming at the limit.
+   */
+  pressure(): number {
+    const now = this.clock();
+    this.evict(now);
+
+    const spent = Math.max(
+      this.spentOver(now, this.budget.windowMs),
+      this.spentOver(now, this.budget.windowMs * PRESSURE_PROBE_SHARE),
+    );
+    return Math.min(1, spent);
   }
 
   /** Record a request that was actually sent. */
