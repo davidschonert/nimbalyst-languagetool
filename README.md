@@ -14,9 +14,11 @@ It works and I use it. The Status section below lists what is still missing.
 
 Two backends, switchable from the settings panel.
 
-**Local.** A self-hosted LanguageTool HTTP Server, by default at `http://localhost:8081`. This is the default, and it is the only backend that runs while you type. Nothing leaves the machine.
+**Local.** A self-hosted LanguageTool HTTP Server, by default at `http://localhost:8081`. Nothing leaves the machine, so it is the one to use for anything you would not hand to a third party.
 
-**Cloud.** `api.languagetoolplus.com`, which needs a Premium username and access token and gives you the premium-only rules. It is rate limited per day, so it is manual only and meant for a final pass.
+**Cloud.** `api.languagetoolplus.com`, which needs a Premium username and access token. It has the premium-only rules and the AI-based rules that LanguageTool only runs in the cloud, so it finds a good deal more than a self-hosted server does. It is rate limited per minute and per day.
+
+Both run while you type. Local is the default because it is the private one, but cloud is what I use for most work, since the better checking is worth more to me than the privacy on a document that is not sensitive. Which one you want is a question about the document, not about a stage of writing.
 
 Document text is sent to the cloud backend only when you choose it. There is one exception, and it is one you have to turn on: if you switch on adding new words to your LanguageTool account, then each word you add goes to LanguageTool, whichever backend you are checking with. That is what makes the word work in the browser extension too. It is off by default, it happens only at the moment you add a word, and it sends that word and nothing else.
 

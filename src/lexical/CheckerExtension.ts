@@ -31,10 +31,15 @@ import { UnderlineLayer, type UnderlineHit } from '../ui/UnderlineLayer';
  * Long enough that a pause in typing triggers a check, not a keystroke.
  *
  * A local server is unmetered and answers a full document in roughly half a
- * second, so it can afford to feel responsive. The cloud backend is rate
- * limited per day, so it waits for a real pause rather than a gap between
- * words. Superseded checks are aborted either way, so a short wait costs
- * canceled requests rather than duplicated work.
+ * second, so it can afford to feel responsive.
+ *
+ * The cloud figure was chosen when cloud was assumed to be a rare final pass,
+ * and it is wrong for a backend used continuously: two and a half seconds is a
+ * wait you feel on every pause. Replacing it is the roadmap's `A debounce that
+ * accounts for what is being sent`, and the answer is not a smaller constant.
+ *
+ * Superseded checks are aborted either way, so a short wait costs canceled
+ * requests rather than duplicated work.
  */
 const CHECK_DEBOUNCE_MS: Record<Backend, number> = {
   local: 400,

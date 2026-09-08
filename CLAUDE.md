@@ -18,11 +18,16 @@ It is a contributed Lexical extension rather than a standalone app. The host han
 
 Two backends, switchable in settings:
 
-- Local (default). A self-hosted LanguageTool HTTP Server at `http://localhost:8081`. It runs while
-  you type, and nothing leaves the machine.
+- Local (default). A self-hosted LanguageTool HTTP Server at `http://localhost:8081`. Nothing
+  leaves the machine.
 - Cloud. `api.languagetoolplus.com`, with a Premium username and access token. It has the
   premium-only rules and the AI-based rules, which LanguageTool only runs in the cloud, and is rate
-  limited per day.
+  limited per minute and per day.
+
+Both run while you type, and neither is a final-pass mode. Local is the default because it is the
+private one, but cloud is the one actually in use for most work, since the checking is better and
+most documents are not sensitive. Anything tuned on the assumption that cloud is rare, manual or
+reserved for a last look is tuned against a workflow nobody has.
 
 ## The pipeline
 

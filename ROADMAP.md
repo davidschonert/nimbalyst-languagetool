@@ -48,6 +48,11 @@ Left behind when the rest of the rate limiting entry was implemented, and nearly
 2500ms cloud. It is too slow for a Premium account and too fast for a document that was just pasted
 in.
 
+The cloud figure matters more than it looks. It was chosen on the assumption that cloud was a rare
+final pass, where a long wait costs nothing. Cloud is in fact the backend in daily use, because the
+premium and AI rules find a good deal more, so that two and a half seconds is felt on every pause of
+every document. It is the most visible thing left on this list.
+
 The meter answers whether there is room to send right now. It does not answer how long to wait
 before asking, which is what the debounce is for, and a single number cannot account for how much a
 given check is about to send. The two compose: the debounce decides when to look, and the meter
@@ -108,8 +113,12 @@ it can be estimated.
 ## A one-off cloud check
 
 From the brief: a command that runs a full-document check against the cloud regardless of which
-backend is selected. The intended workflow is local while writing and cloud for a final pass before
-something ships, so this is the piece that makes the cloud backend useful without switching to it.
+backend is selected.
+
+The brief assumed local while writing and cloud for a final pass, and that is not the workflow in
+practice: cloud is the daily driver and local is for documents that should not leave the machine. So
+the value of this has moved. It is no longer the thing that makes cloud reachable, it is the thing
+that lets one document be checked properly without turning the private default off for everything.
 
 `contributions.commands` is described as reserved for future contributions in the manifest
 reference, so a slash command may be the only route available today. Worth confirming.
