@@ -69,7 +69,7 @@ describe('the pressure on the budget', () => {
 
     // A quarter of the way up the range at half the budget, not half.
     expect(half).toBeLessThan(middle);
-    expect(half).toBeCloseTo(cloud.minMs + 0.25 * (cloud.maxMs - cloud.minMs), 5);
+    expect(half).toBe(Math.round(cloud.minMs + 0.25 * (cloud.maxMs - cloud.minMs)));
   });
 
   it('reaches the ceiling when the window is spent', () => {
@@ -184,6 +184,35 @@ describe('a typist who pauses exactly as long as they are asked to', () => {
       expect(pace.delayMs).toBeLessThan(500);
       now += 4_000;
       meter.record(800);
+    }
+  });
+});
+
+/**
+ * Both of these come from the first manual pass rather than from reasoning, and
+ * both were wrong in what the console line said rather than in what it waited.
+ */
+describe('what the line blames', () => {
+  it('blames the pause when nothing is materially holding the check', () => {
+    // The shape the logs showed: a wait of 374ms against a 350ms floor, with
+    // the budget at a tenth of itself, reported as `pressure`.
+    const pace = paceCheck({ backend: 'cloud', pendingChars: 220, pressure: 0.106 });
+
+    expect(pace.delayMs).toBeLessThan(cloud.minMs + 50);
+    expect(pace.reason).toBe('pause');
+  });
+
+  it('blames the term once it is adding something worth seeing', () => {
+    const pace = paceCheck({ backend: 'cloud', pendingChars: 0, pressure: 0.3 });
+
+    expect(pace.delayMs).toBeGreaterThan(cloud.minMs + 50);
+    expect(pace.reason).toBe('pressure');
+  });
+
+  it('is a whole number of milliseconds', () => {
+    for (const pressure of [0.106, 0.3, 0.30712, 0.5]) {
+      const { delayMs } = paceCheck({ backend: 'cloud', pendingChars: 137, pressure });
+      expect(Number.isInteger(delayMs)).toBe(true);
     }
   });
 });

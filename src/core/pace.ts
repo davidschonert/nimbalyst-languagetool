@@ -84,7 +84,23 @@ export const PACING: Record<Backend, Pacing> = {
  */
 const SIZE_FULL_CHARS = 20_000;
 
-/** Why a check is waiting as long as it is. Reported on the rate-limit console line. */
+/**
+ * How much a term has to add over the floor before it is named as the thing
+ * holding the check back.
+ *
+ * Without it the label is decided by whichever term wins by a hair, and the
+ * first manual pass showed every ordinary keystroke logged as `(pressure)` at
+ * 374ms against a 350ms floor. A term contributing 24ms is not what is holding
+ * anything, and reading `pressure` there suggests the budget is straining when
+ * it is at a tenth of itself. The wait is still the maximum of every term; this
+ * only decides what the line is allowed to blame.
+ */
+const REASON_MARGIN_MS = 50;
+
+/**
+ * What is materially holding a check back, as opposed to which term won by a
+ * hair. `pause` means nothing is: the check is waiting out the floor.
+ */
 export type PaceReason = 'pause' | 'size' | 'pressure' | 'supersede' | 'budget';
 
 export interface PaceInput {
@@ -128,7 +144,7 @@ export function paceCheck(input: PaceInput): Pace {
   const take = (candidate: number, because: PaceReason): void => {
     if (candidate <= delayMs) return;
     delayMs = candidate;
-    reason = because;
+    if (candidate - pacing.minMs >= REASON_MARGIN_MS) reason = because;
   };
 
   const size = input.pendingChars / SIZE_FULL_CHARS;
@@ -147,7 +163,9 @@ export function paceCheck(input: PaceInput): Pace {
   // when to look, and this one is the service refusing to be looked at, so a check
   // sent before it expires is a check that comes back rejected.
   const budgetWaitMs = input.budgetWaitMs ?? 0;
-  if (budgetWaitMs > delayMs) return { delayMs: budgetWaitMs, reason: 'budget' };
+  if (budgetWaitMs > delayMs) return { delayMs: Math.round(budgetWaitMs), reason: 'budget' };
 
-  return { delayMs, reason };
+  // Rounded because it is a timer delay and a log line, and neither is improved
+  // by 374.30957222222224.
+  return { delayMs: Math.round(delayMs), reason };
 }
