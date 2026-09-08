@@ -126,6 +126,42 @@ already has a populated account dictionary. The two lists are not synchronised
 and are not meant to be: an import would be a one-off action the user asks for,
 not a background reconciliation.
 
+## Whether the suggestion cap applies to Premium
+
+The public API documents that only the first 30 misspelled words in a request get suggestions.
+Anything past that comes back as a match with an empty `replacements` array. That is documented for
+the free public endpoint, and I could not find anything saying either way about Premium, so this is
+a question rather than a finding.
+
+If it does apply to Premium, the cloud chunk limit is what decides how often it bites. It is 60,000
+characters, which is easily enough to hold more than 30 misspellings, so the tail of a long chunk
+would underline without offering a fix. The card renders that the same way it renders a match that
+genuinely has no suggestion, so it would read as LanguageTool having no idea rather than as the
+request being too large.
+
+Testing it is one request: a document with 40 deliberate misspellings, sent to
+api.languagetoolplus.com with real credentials, then count how many of the returned matches carry
+replacements. If the cap is there, the fix is a lower `CHUNK_LIMIT.cloud`, which trades against the
+rate meter, since the same document then costs more requests. Worth measuring before choosing a
+number.
+
+## More of the match than the card shows
+
+`RawMatch` in `core/client.ts` names the fields the popover uses. The response carries four more
+that it does not: `rule.urls`, `rule.description`, `rule.subId`, and a top-level `sentence`.
+
+`urls` is the one worth having. It links to LanguageTool's own page for the rule, which explains the
+rule at a length the card has no room for, so a "Learn more" link would cover the case where the
+message alone does not say what is actually wrong. It is optional in the response, so the link only
+appears when the rule has one.
+
+The other three can stay out. `sentence` repeats what `context` already carries, `subId` only
+distinguishes variants of one rule, and `description` names the rule itself, which would be a third
+line of text on a card that already shows the category name, the short message and the message.
+
+The card is plain DOM in the renderer, so an external link has to be handed to the host to open
+rather than followed in place. That is the part to check before starting.
+
 ## Move secrets onto ExtensionStorage, once the host allows it
 
 Not work to schedule, but work to notice when it becomes possible.

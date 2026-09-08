@@ -21,7 +21,8 @@ Two backends, switchable in settings:
 - Local (default). A self-hosted LanguageTool HTTP Server at `http://localhost:8081`. It runs while
   you type, and nothing leaves the machine.
 - Cloud. `api.languagetoolplus.com`, with a Premium username and access token. It has the
-  premium-only rules and is rate limited per day.
+  premium-only rules and the AI-based rules, which LanguageTool only runs in the cloud, and is rate
+  limited per day.
 
 ## The pipeline
 
