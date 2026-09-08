@@ -6,8 +6,23 @@
  * so a form-encoded POST is a CORS-simple request and needs no preflight. That
  * was verified against a live server rather than assumed.
  *
+ * The local server only sends that header when it is started with
+ * `--allow-origin`. `allowOriginUrl` in the server's own config defaults to
+ * null, so a server started without the flag answers the request and the
+ * browser then blocks the response. `fetch` reports that exactly as it reports
+ * a refused connection, so it arrives here as `offline` and there is nothing
+ * this module can do to tell the two apart. README.md carries the flag in its
+ * setup instructions for that reason.
+ *
  * Document text only ever leaves the machine when the cloud backend is
  * explicitly selected. Local is the default.
+ *
+ * There is no anonymous cloud path, on purpose. `check()` refuses to send
+ * without both a username and a token, so nothing here ever reaches
+ * api.languagetool.org, whose terms rule out automated requests and require a
+ * visible link back to languagetool.org that is not `rel="nofollow"`. The
+ * cloud backend is api.languagetoolplus.com with Premium credentials, which is
+ * a different agreement.
  */
 
 import type { AnnotatedDocument } from './annotate';
@@ -129,6 +144,12 @@ const ADD_WORD_TIMEOUT_MS = 10_000;
  * A 200 is not the answer. The service reports a refused word — one already in
  * the account, or one it will not accept — as `{"added": false}` with a 200, so
  * the body is what decides, and anything but `true` throws.
+ *
+ * No `dict` is sent, so the word goes to the account's default dictionary,
+ * which is the one a check reads when the request carries no `dicts`. A named
+ * dictionary holds 500 words, and hitting that cap is one of the things
+ * `{"added": false}` covers, so a full dictionary is reported as a plain
+ * failure rather than as itself.
  */
 export async function addWordToAccount(
   word: string,

@@ -22,6 +22,36 @@ Document text is sent to the cloud backend only when you choose it. There is one
 
 The access token is kept in Nimbalyst's encrypted secret store, so it is never written into this repository or into a settings file.
 
+### Running the local server
+
+Follow [LanguageTool's own instructions](https://dev.languagetool.org/http-server) for downloading
+and starting the server, and keep the `--allow-origin` flag they show:
+
+```bash
+java -cp languagetool-server.jar org.languagetool.server.HTTPServer --config server.properties --port 8081 --allow-origin
+```
+
+That flag is the one to watch. Without it the server answers normally but sends no
+`Access-Control-Allow-Origin` header, so the browser blocks the response before this extension ever
+sees it. A blocked response and a server that is not running look identical from here, so the editor
+says it could not reach LanguageTool and you go looking at the wrong thing.
+
+The local server also does not have the AI-based rules, which LanguageTool only runs in the cloud.
+That is a second reason the cloud backend finds things the local one does not, on top of the premium
+rules.
+
+Its caches are off by default, and turning them on is worth it for this extension in particular.
+Editing one paragraph re-sends the paragraphs on either side of it as context, so the rules that
+reach across a paragraph break still work, which means the same text goes to the server again and
+again. A `server.properties` along these lines makes those repeats cheap:
+
+```properties
+cacheSize=1000
+cacheTTLSeconds=600
+pipelineCaching=true
+pipelinePrewarming=true
+```
+
 ## Status
 
 - [x] Underlines in the markdown editor, with a correction card and click to apply
