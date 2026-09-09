@@ -132,13 +132,20 @@ export function chunkLimit(): number {
 }
 
 /**
- * Say something when the rate limiter defers a check, instead of deferring it
- * silently.
+ * Say what the checking is doing, instead of doing it silently.
  *
- * Off by default, because a deferred check is the limiter working rather than
- * anything going wrong, and it corrects itself within the minute. It goes to
- * the console rather than to the editor: it exists to make the limiter legible
- * while testing it, not to interrupt writing.
+ * Two lines, not one. Every check reports how long it waited and what set that
+ * wait, and the limiter reports a check it defers. They are one setting because
+ * they answer one question, which is why checking feels the way it does: a wait
+ * is either the pacing or the budget, and reading the pacing lines is the only
+ * way to tell which. `pace.ts` decides the wait; `warnOnRateLimit` decides
+ * whether it is spoken about.
+ *
+ * Off by default, because neither is anything going wrong: a deferred check is
+ * the limiter working and corrects itself within the minute, and a paced one is
+ * the debounce doing its job. Both go to the console rather than to the editor,
+ * since they exist to make the timing legible while testing it, not to
+ * interrupt writing.
  */
 export function warnOnRateLimit(): boolean {
   return readBoolean(KEYS.warnOnRateLimit);
