@@ -103,6 +103,16 @@ describe('the budget refusing', () => {
     expect(pace.reason).toBe('budget');
   });
 
+  it('is blamed only once it is adding something worth seeing', () => {
+    // 30ms over the floor, which is under the margin every other term goes
+    // through. Reading `(budget)` there says the rate limit is holding a check
+    // the floor was already holding.
+    const small = paceCheck({ backend: 'cloud', pendingChars: 0, budgetWaitMs: 380 });
+
+    expect(small.delayMs).toBe(380);
+    expect(small.reason).toBe('pause');
+  });
+
   it('loses to a longer wait the pacing already wanted', () => {
     const pace = paceCheck({ backend: 'cloud', pendingChars: 40_000, budgetWaitMs: 100 });
 

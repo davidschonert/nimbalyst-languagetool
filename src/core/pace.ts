@@ -161,9 +161,12 @@ export function paceCheck(input: PaceInput): Pace {
 
   // The only term allowed past the ceiling. Every other one is a preference about
   // when to look, and this one is the service refusing to be looked at, so a check
-  // sent before it expires is a check that comes back rejected.
+  // sent before it expires is a check that comes back rejected. Below the ceiling
+  // it goes through `take` like the rest, so a budget wait that adds 30ms is not
+  // blamed for a check the floor was already holding.
   const budgetWaitMs = input.budgetWaitMs ?? 0;
-  if (budgetWaitMs > delayMs) return { delayMs: Math.round(budgetWaitMs), reason: 'budget' };
+  if (budgetWaitMs > pacing.maxMs) return { delayMs: Math.round(budgetWaitMs), reason: 'budget' };
+  take(budgetWaitMs, 'budget');
 
   // Rounded because it is a timer delay and a log line, and neither is improved
   // by 374.30957222222224.

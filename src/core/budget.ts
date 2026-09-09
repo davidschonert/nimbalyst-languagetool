@@ -41,8 +41,9 @@ export const CLOUD_BUDGET: Budget = {
 
 /**
  * The short horizon `pressure` also measures, as a fraction of the window. A
- * quarter of a minute is long enough that one chunked document does not read as
- * a sprint, and short enough to catch one before it has spent the window.
+ * quarter of a minute is long enough that a burst of ordinary checks does not
+ * read as a sprint, and short enough to catch one before it has spent the
+ * window.
  */
 const PRESSURE_PROBE_SHARE = 0.25;
 
@@ -109,8 +110,8 @@ export class RateMeter {
     return this.waitFor(characters) === 0;
   }
 
-  /** How much of the allowance for `horizonMs` has been spent inside it. */
-  private spentOver(now: number, horizonMs: number): number {
+  /** What was sent inside the last `horizonMs`. */
+  private since(now: number, horizonMs: number): { requests: number; characters: number } {
     const from = now - horizonMs;
     let requests = 0;
     let characters = 0;
@@ -119,12 +120,7 @@ export class RateMeter {
       requests += 1;
       characters += entry.characters;
     }
-
-    const share = horizonMs / this.budget.windowMs;
-    return Math.max(
-      requests / (this.budget.requests * share),
-      characters / (this.budget.characters * share),
-    );
+    return { requests, characters };
   }
 
   /**
@@ -142,10 +138,18 @@ export class RateMeter {
    * seconds behind: a burst starting from an empty window is half over before
    * the fraction has risen enough to slow it down, and measuring it showed 68
    * requests in the first minute against a steady state of 50. The short
-   * horizon is the same question over a quarter of the window, scaled to a
-   * quarter of the allowance, so it reacts within seconds and settles on the
-   * same answer. Nothing about the steady state changes; only how long it takes
-   * to arrive.
+   * horizon reacts within seconds and settles on the same answer. Nothing about
+   * the steady state changes; only how long it takes to arrive.
+   *
+   * The short horizon counts requests and not characters, because the transient
+   * it was added for is a request burst and because the service has no
+   * per-quarter-minute character allowance to be measured against. Scaling one
+   * to a quarter of the minute's 300,000 gives 75,000, which is 1.25 times the
+   * 60,000 a single Premium request may carry, so one perfectly legal chunk
+   * read as 0.8 pressure and paced the next fifteen seconds of editing at
+   * 1726ms. That is the wait this module exists to remove, arriving right after
+   * the one action most likely to precede editing. Characters are still counted
+   * over the minute, which is where the service actually limits them.
    *
    * It reports this Nimbalyst window's spending, which is all the meter has ever
    * known. Another window is spending the same account against its own copy, so
@@ -156,9 +160,13 @@ export class RateMeter {
     const now = this.clock();
     this.evict(now);
 
+    const window = this.since(now, this.budget.windowMs);
+    const probe = this.since(now, this.budget.windowMs * PRESSURE_PROBE_SHARE);
+
     const spent = Math.max(
-      this.spentOver(now, this.budget.windowMs),
-      this.spentOver(now, this.budget.windowMs * PRESSURE_PROBE_SHARE),
+      window.requests / this.budget.requests,
+      window.characters / this.budget.characters,
+      probe.requests / (this.budget.requests * PRESSURE_PROBE_SHARE),
     );
     return Math.min(1, spent);
   }

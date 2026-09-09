@@ -180,34 +180,55 @@ describe('the pressure reading', () => {
     expect(meter.pressure()).toBeGreaterThan(0.9);
   });
 
-  it('does not read an ordinary document check as a sprint', () => {
+  it('does not read one legal request as a sprint', () => {
     const clock = fakeClock();
     const meter = new RateMeter(CLOUD_BUDGET, clock.now);
 
-    // Four chunks of a few thousand characters each, sent back to back the way
-    // a run sends them. That is what opening a document costs, and it should
-    // not leave the next edit paced as though the budget were in trouble.
-    for (let i = 0; i < 4; i += 1) {
-      meter.record(5_000);
-      clock.advance(400);
-    }
+    // 60,000 characters is the most a single Premium request may carry, so this
+    // is one chunk of a chapter-sized document and nothing unusual. It is a
+    // fifth of the minute's characters and one eightieth of its requests, and
+    // it has to read that way: scaling the characters to a quarter of the
+    // minute made this one chunk read as 0.8 and paced the next fifteen seconds
+    // of editing at 1726ms, which is the wait the pacing exists to remove.
+    meter.record(60_000);
 
-    expect(meter.pressure()).toBeLessThan(0.4);
+    expect(meter.pressure()).toBeCloseTo(0.2, 5);
   });
 
-  it('does read a very large document as one, because it is', () => {
+  it('does read a document that really has spent the minute', () => {
     const clock = fakeClock();
     const meter = new RateMeter(CLOUD_BUDGET, clock.now);
 
-    // 80,000 characters inside two seconds is above the 75,000 the account
-    // allows in any quarter minute, so the pressure is real rather than a false
-    // alarm, and the pacing is right to hold the next check back until it
-    // decays.
-    for (let i = 0; i < 4; i += 1) {
-      meter.record(20_000);
+    // Five full chunks is 300,000 characters, which is the whole minute's
+    // allowance, so this one is real rather than an artefact of the horizon.
+    for (let i = 0; i < 5; i += 1) {
+      meter.record(60_000);
       clock.advance(400);
     }
 
     expect(meter.pressure()).toBe(1);
+  });
+
+  /**
+   * The trap behind the High finding on this PR: `paceFor` asked the meter
+   * about a whole document, and the meter answers about one request.
+   */
+  it('answers about one request, not about a whole document', () => {
+    const clock = fakeClock();
+    const meter = new RateMeter(CLOUD_BUDGET, clock.now);
+
+    meter.record(50_000);
+    clock.advance(1_000);
+
+    // A 280,000 character document is not a request. Asking when all of it
+    // could go at once needs most of the window free, while the 60,000 its
+    // first chunk costs can go now.
+    expect(meter.waitFor(280_000)).toBeGreaterThan(50_000);
+    expect(meter.waitFor(60_000)).toBe(0);
+
+    // And past the window's whole allowance it gives up and lets the service
+    // answer, so a larger document reads as cheaper than a smaller one. Which
+    // is why the caller asks about a chunk.
+    expect(meter.waitFor(300_001)).toBe(0);
   });
 });

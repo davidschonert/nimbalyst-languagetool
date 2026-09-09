@@ -225,6 +225,17 @@ tests in `src/core/*.test.ts` exist. If you change one, change its test in the s
   limiter from one that avoids refusals into one that recovers from them. `pressure()` is asked over
   two horizons for the same reason: over the minute alone a burst from a cold meter is half spent
   before the fraction has risen enough to slow it.
+- The short pressure horizon counts requests and not characters. The service has no allowance per
+  quarter minute to measure a fraction of, and scaling the minute's 300,000 characters to one gives
+  75,000, which is 1.25 times what a single Premium request may carry. One legal chunk then read as
+  0.8 pressure and paced the next fifteen seconds of editing at 1726ms, which is the wait the pacing
+  exists to remove. Characters are counted over the minute, which is where they are really limited.
+- The meter answers about one request, so ask it about one. `waitFor` takes the size of a single
+  send, and a check sends its stale text as chunks, so `paceFor` asks about the chunk limit rather
+  than the whole pending document. Asking about the document blocks a check for most of a window
+  over a request that would have gone at once, and past the window's whole character allowance
+  `waitFor` gives up and lets the service answer, so the larger document comes back cheaper than the
+  smaller one.
 - Running out of budget defers a check, it does not drop one. The blocks that were not reached stay
   stale, so the retry continues from there rather than starting again at the top of the document.
   Nothing is said about it unless `languagetool.warnOnRateLimit` is on, and then only in the

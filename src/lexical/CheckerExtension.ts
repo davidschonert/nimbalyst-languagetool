@@ -476,7 +476,13 @@ export const LanguageToolExtension = defineExtension({
         backend: selected,
         pendingChars: chars,
         pressure: metered ? meter.pressure() : 0,
-        budgetWaitMs: metered ? meter.waitFor(chars) : 0,
+        // About one request, because that is what the meter answers about. A
+        // check sends its stale text as chunks, so the largest thing it can put
+        // on the wire is the chunk limit, and asking about the whole document
+        // asks when all of it could go in one go. On a 280,000 character
+        // document with 50,000 already spent that answered 59 seconds, while
+        // the 60,000 its first chunk actually costs could have gone at once.
+        budgetWaitMs: metered ? meter.waitFor(Math.min(chars, chunkLimit())) : 0,
         inFlightForMs: runStartedAt === undefined ? undefined : Date.now() - runStartedAt,
         ...overrides,
       });
